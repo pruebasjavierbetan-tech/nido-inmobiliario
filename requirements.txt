@@ -1,0 +1,6 @@
+fastapi==0.111.0
+uvicorn==0.29.0
+requests==2.31.0
+beautifulsoup4==4.12.3
+anthropic==0.25.0
+python-multipart==0.0.9

@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nido — Agente Inmobiliario IA</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0b0a09;
+  --surface: #141210;
+  --surface2: #1c1a17;
+  --surface3: #252220;
+  --border: #2a2724;
+  --gold: #c9a84c;
+  --gold-light: #e8c97a;
+  --gold-dim: rgba(201,168,76,0.15);
+  --text: #ede9e0;
+  --muted: #7a7268;
+  --green: #5ab882;
+  --red: #d96060;
+  --amber: #d4923a;
+  --radius: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Layout ── */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ── Header ── */
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky; top: 0; z-index: 50;
+}
+.logo {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.7rem; font-weight: 600;
+  color: var(--gold); letter-spacing: 0.08em;
+  display: flex; align-items: baseline; gap: 0.5rem;
+}
+.logo-sub {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.65rem; font-weight: 400;
+  color: var(--muted); letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+.header-nav { display: flex; gap: 0.25rem; }
+.nav-btn {
+  padding: 0.45rem 1rem; border-radius: 6px;
+  border: none; background: transparent;
+  color: var(--muted); font-family: 'DM Sans', sans-serif;
+  font-size: 0.78rem; font-weight: 500;
+  cursor: pointer; transition: all 0.2s;
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.nav-btn:hover  { color: var(--text); background: var(--surface2); }
+.nav-btn.active { color: var(--gold); background: var(--gold-dim); }
+
+/* ── Main body ── */
+.body { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: 300px; flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 1.5rem 1.25rem;
+  display: flex; flex-direction: column; gap: 1.25rem;
+}
+.sidebar-section-label {
+  font-size: 0.62rem; text-transform: uppercase;
+  letter-spacing: 0.18em; color: var(--muted);
+  margin-bottom: 0.6rem;
+}
+.field { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.75rem; }
+.field label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.input, .select {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.6rem 0.8rem;
+  color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 0.85rem;
+  outline: none; transition: border-color 0.2s; width: 100%;
+}
+.input:focus, .select:focus { border-color: var(--gold); }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+.checkbox-group { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.portal-chip {
+  padding: 0.3rem 0.65rem; border-radius: 20px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); font-family: 'DM Sans', sans-serif;
+  font-size: 0.7rem; cursor: pointer; transition: all 0.2s;
+}
+.portal-chip.active { border-color: var(--gold); color: var(--gold); background: var(--gold-dim); }
+.divider { border: none; border-top: 1px solid var(--border); margin: 0.25rem 0; }
+.btn-search {
+  width: 100%; padding: 0.85rem;
+  background: var(--gold); color: #0b0a09;
+  border: none; border-radius: 7px;
+  font-family: 'DM Sans', sans-serif; font-size: 0.8rem; font-weight: 600;
+  cursor: pointer; transition: background 0.2s;
+  text-transform: uppercase; letter-spacing: 0.1em;
+}
+.btn-search:hover:not(:disabled) { background: var(--gold-light); }
+.btn-search:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Content ── */
+.content { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+
+/* ── Toolbar ── */
+.toolbar {
+  padding: 0.85rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--surface); gap: 1rem; flex-wrap: wrap;
+}
+.toolbar-left  { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.toolbar-right { display: flex; align-items: center; gap: 0.5rem; }
+.result-count { font-size: 0.75rem; color: var(--muted); }
+.result-count b { color: var(--gold); }
+.view-toggle { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.view-btn { padding: 0.35rem 0.65rem; border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
+.view-btn.active { background: var(--gold); color: #0b0a09; }
+.btn-compare {
+  padding: 0.45rem 1rem; border: 1px solid var(--gold);
+  border-radius: 6px; background: transparent;
+  color: var(--gold); font-family: 'DM Sans', sans-serif;
+  font-size: 0.75rem; font-weight: 500; cursor: pointer; transition: all 0.2s;
+}
+.btn-compare:hover { background: var(--gold); color: #0b0a09; }
+.sort-select {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.35rem 0.65rem;
+  color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 0.75rem;
+  outline: none; cursor: pointer;
+}
+
+/* ── Consejo IA banner ── */
+.consejo-banner {
+  margin: 1.25rem 1.5rem 0;
+  padding: 1rem 1.25rem;
+  background: var(--gold-dim);
+  border: 1px solid rgba(201,168,76,0.3);
+  border-radius: var(--radius);
+  font-size: 0.82rem; color: var(--text);
+  display: flex; gap: 0.75rem; align-items: flex-start;
+}
+.consejo-icon { font-size: 1.1rem; flex-shrink: 0; }
+
+/* ── Grid / List ── */
+.properties-area { padding: 1.25rem 1.5rem; flex: 1; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px,1fr)); gap: 1rem; }
+.list { display: flex; flex-direction: column; gap: 0.75rem; }
+
+/* ── Property Card ── */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  transition: border-color 0.2s, transform 0.2s;
+  position: relative; cursor: default;
+}
+.card:hover { border-color: rgba(201,168,76,0.4); transform: translateY(-2px); }
+.card.top3 { border-color: rgba(201,168,76,0.5); }
+.card.list-mode { display: flex; }
+
+.card-img {
+  height: 150px; background: var(--surface2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2.5rem; position: relative; flex-shrink: 0;
+}
+.card.list-mode .card-img { width: 130px; height: auto; }
+
+.card-badge {
+  position: absolute; top: 8px; left: 8px;
+  padding: 0.2rem 0.55rem; border-radius: 4px;
+  font-size: 0.62rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em;
+}
+.badge-excelente { background: rgba(90,184,130,0.15); color: var(--green); }
+.badge-justo     { background: rgba(212,146,58,0.15); color: var(--amber); }
+.badge-alto      { background: rgba(217,96,96,0.15);  color: var(--red); }
+
+.card-fav {
+  position: absolute; top: 8px; right: 8px;
+  background: rgba(11,10,9,0.7); border: none;
+  border-radius: 50%; width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 0.85rem; transition: background 0.2s;
+}
+.card-fav:hover { background: rgba(11,10,9,0.95); }
+
+.card-compare-check {
+  position: absolute; top: 42px; right: 8px;
+  background: rgba(11,10,9,0.7); border: 1px solid var(--border);
+  border-radius: 4px; width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 0.7rem; color: var(--muted); transition: all 0.2s;
+}
+.card-compare-check.selected { border-color: var(--gold); color: var(--gold); background: var(--gold-dim); }
+
+.top3-ribbon {
+  position: absolute; bottom: 8px; left: 8px;
+  padding: 0.15rem 0.5rem; background: var(--gold);
+  color: #0b0a09; border-radius: 3px;
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em;
+}
+
+.card-body { padding: 0.9rem; flex: 1; }
+.card-price {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.2rem; font-weight: 600; color: var(--gold);
+}
+.card-title { font-size: 0.82rem; font-weight: 500; margin: 0.2rem 0; }
+.card-location { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.5rem; }
+.card-specs { display: flex; gap: 0.65rem; font-size: 0.68rem; color: var(--muted); flex-wrap: wrap; }
+.card-spec { display: flex; align-items: center; gap: 0.2rem; }
+.card-pm2 { font-size: 0.68rem; color: var(--muted); margin-top: 0.3rem; }
+.card-portal-tag {
+  display: inline-block; margin-top: 0.4rem;
+  padding: 0.1rem 0.45rem; border-radius: 3px;
+  border: 1px solid var(--border); font-size: 0.6rem;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
+}
+.card-analysis {
+  margin-top: 0.6rem; padding: 0.65rem 0.75rem;
+  background: var(--surface2); border-radius: 6px;
+  font-size: 0.75rem; color: var(--muted); line-height: 1.5;
+}
+.card-analysis-header { font-size: 0.62rem; color: var(--gold); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.3rem; }
+.card-actions { display: flex; gap: 0.4rem; margin-top: 0.65rem; flex-wrap: wrap; }
+.btn-sm {
+  padding: 0.3rem 0.65rem; font-size: 0.7rem; border-radius: 4px;
+  cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--muted);
+  font-family: 'DM Sans', sans-serif; transition: all 0.2s;
+  text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem;
+}
+.btn-sm:hover { border-color: var(--gold); color: var(--gold); }
+.btn-sm.danger:hover { border-color: var(--red); color: var(--red); }
+
+/* ── Empty state ── */
+.empty {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: var(--muted); gap: 1rem; padding: 4rem;
+}
+.empty-icon { font-size: 3.5rem; opacity: 0.4; }
+.empty-title { font-family: 'Cormorant Garamond', serif; font-size: 1.3rem; color: var(--text); }
+.empty-sub { font-size: 0.8rem; text-align: center; max-width: 300px; }
+
+/* ── Loading ── */
+.loading {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 1.5rem;
+}
+.spinner {
+  width: 40px; height: 40px;
+  border: 2px solid var(--border);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-size: 0.8rem; color: var(--muted); }
+.loading-portales { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; }
+.loading-portal-dot {
+  padding: 0.25rem 0.6rem; border-radius: 20px;
+  background: var(--surface2); border: 1px solid var(--border);
+  font-size: 0.68rem; color: var(--muted);
+  animation: pulse 1.5s infinite;
+}
+.loading-portal-dot:nth-child(2) { animation-delay: 0.3s; }
+.loading-portal-dot:nth-child(3) { animation-delay: 0.6s; }
+.loading-portal-dot:nth-child(4) { animation-delay: 0.9s; }
+@keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:1} }
+
+/* ── Modal overlay ── */
+.overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.75); z-index: 200;
+  display: flex; align-items: center; justify-content: center; padding: 2rem;
+}
+.modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; width: 100%; max-width: 860px;
+  max-height: 90vh; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.modal-header {
+  padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.modal-title { font-family: 'Cormorant Garamond', serif; font-size: 1.15rem; }
+.btn-close { background: transparent; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer; }
+.modal-body { overflow-y: auto; padding: 1.5rem; flex: 1; }
+
+/* ── Comparador ── */
+.compare-cols { display: grid; gap: 1rem; }
+.compare-prop-header { text-align: center; padding: 1rem; background: var(--surface2); border-radius: 8px; }
+.compare-prop-emoji { font-size: 2rem; }
+.compare-prop-name { font-size: 0.82rem; font-weight: 500; margin: 0.4rem 0 0.2rem; }
+.compare-prop-price { font-family: 'Cormorant Garamond', serif; color: var(--gold); font-size: 1.1rem; }
+.compare-rows { display: flex; flex-direction: column; gap: 0; margin-top: 1rem; }
+.compare-row { display: grid; padding: 0.7rem 0; border-bottom: 1px solid var(--border); }
+.compare-row-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 0.4rem; }
+.compare-row-vals { display: grid; gap: 1rem; }
+.compare-val { font-size: 0.82rem; }
+.compare-val.best { color: var(--green); font-weight: 600; }
+.compare-ai-section { margin-top: 1.5rem; }
+.compare-ai-result { padding: 1rem; background: var(--surface2); border-radius: 8px; font-size: 0.8rem; color: var(--text); line-height: 1.7; white-space: pre-wrap; }
+
+/* ── Favoritos / Alertas views ── */
+.view-section { padding: 1.5rem; }
+.view-title { font-family: 'Cormorant Garamond', serif; font-size: 1.4rem; margin-bottom: 1rem; }
+.fav-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap: 1rem; }
+.alerta-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem; display: flex;
+  justify-content: space-between; align-items: center; gap: 1rem;
+}
+.alerta-info { flex: 1; }
+.alerta-email { font-size: 0.85rem; font-weight: 500; }
+.alerta-criterios { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+.alerta-date { font-size: 0.65rem; color: var(--muted); margin-top: 0.4rem; }
+.alertas-list { display: flex; flex-direction: column; gap: 0.6rem; }
+
+/* ── Alerta form modal ── */
+.alerta-form { display: flex; flex-direction: column; gap: 1rem; }
+.alerta-form .field { margin-bottom: 0; }
+
+/* ── Score badge ── */
+.score-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 50%;
+  font-size: 0.72rem; font-weight: 700;
+  position: absolute; top: 8px; right: 42px;
+  pointer-events: none;
+}
+.score-hi  { background: rgba(90,184,130,0.2); color: var(--green); border: 1px solid var(--green); }
+.score-mid { background: rgba(212,146,58,0.2); color: var(--amber); border: 1px solid var(--amber); }
+.score-lo  { background: rgba(217,96,96,0.2);  color: var(--red);   border: 1px solid var(--red); }
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: 1.5rem; right: 1.5rem;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.75rem 1.1rem;
+  font-size: 0.8rem; z-index: 300;
+  animation: slideIn 0.3s ease;
+  max-width: 300px;
+}
+.toast.success { border-color: var(--green); color: var(--green); }
+.toast.error   { border-color: var(--red);   color: var(--red); }
+@keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+  .body { flex-direction: column; }
+  .grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="logo">
+      Nido
+      <span class="logo-sub">Agente Inmobiliario IA</span>
+    </div>
+    <nav class="header-nav">
+      <button class="nav-btn active" onclick="setView('buscar')">🔍 Buscar</button>
+      <button class="nav-btn" onclick="setView('favoritos')">⭐ Favoritos</button>
+      <button class="nav-btn" onclick="setView('alertas')">🔔 Alertas</button>
+    </nav>
+  </header>
+
+  <div class="body">
+
+    <!-- Sidebar de filtros -->
+    <aside class="sidebar" id="sidebar">
+      <div>
+        <div class="sidebar-section-label">Ubicación</div>
+        <div class="field">
+          <label>Ciudad</label>
+          <select class="select" id="ciudad">
+            <option value="bogota">Bogotá</option>
+            <option value="medellin">Medellín</option>
+            <option value="cali">Cali</option>
+            <option value="barranquilla">Barranquilla</option>
+            <option value="cartagena">Cartagena</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <div class="sidebar-section-label">Inmueble</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Tipo</label>
+            <select class="select" id="tipo">
+              <option value="apartamento">Apartamento</option>
+              <option value="casa">Casa</option>
+              <option value="oficina">Oficina</option>
+              <option value="lote">Lote</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Operación</label>
+            <select class="select" id="operacion">
+              <option value="venta">Venta</option>
+              <option value="arriendo">Arriendo</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="sidebar-section-label">Precio (COP)</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Mínimo</label>
+            <input class="input" id="precio_min" type="number" placeholder="0" step="10000000">
+          </div>
+          <div class="field">
+            <label>Máximo</label>
+            <input class="input" id="precio_max" type="number" placeholder="800M" step="10000000">
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="sidebar-section-label">Características</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Área mín (m²)</label>
+            <input class="input" id="area_min" type="number" placeholder="50">
+          </div>
+          <div class="field">
+            <label>Área máx (m²)</label>
+            <input class="input" id="area_max" type="number" placeholder="—">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Hab. mín</label>
+            <select class="select" id="habitaciones_min">
+              <option value="0">Cualquiera</option>
+              <option value="1">1+</option>
+              <option value="2">2+</option>
+              <option value="3">3+</option>
+              <option value="4">4+</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Baños mín</label>
+            <select class="select" id="banos_min">
+              <option value="0">Cualquiera</option>
+              <option value="1">1+</option>
+              <option value="2">2+</option>
+              <option value="3">3+</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Estrato mín</label>
+            <select class="select" id="estrato_min">
+              <option value="0">Cualquiera</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Estrato máx</label>
+            <select class="select" id="estrato_max">
+              <option value="0">Cualquiera</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+            </select>
+          </div>
+        </div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:0.5rem">
+          <input type="checkbox" id="parqueadero" style="accent-color:var(--gold);width:14px;height:14px">
+          <label for="parqueadero" style="font-size:0.78rem;cursor:pointer;text-transform:none;letter-spacing:0">Con parqueadero</label>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <div>
+        <div class="sidebar-section-label">Portales</div>
+        <div class="checkbox-group" id="portales">
+          <button class="portal-chip active" data-portal="metrocuadrado">Metrocuadrado</button>
+          <button class="portal-chip active" data-portal="fincaraiz">Finca Raíz</button>
+          <button class="portal-chip active" data-portal="ciencuadras">Ciencuadras</button>
+        </div>
+        <p style="font-size:0.65rem;color:var(--muted);margin-top:0.5rem">
+          Facebook Marketplace requiere configuración extra (ver manual)
+        </p>
+      </div>
+
+      <hr class="divider">
+
+      <div class="field">
+        <label>Máx. resultados</label>
+        <select class="select" id="max_resultados">
+          <option value="20">20 resultados</option>
+          <option value="30" selected>30 resultados</option>
+          <option value="50">50 resultados</option>
+        </select>
+      </div>
+
+      <button class="btn-search" id="btn-buscar" onclick="buscar()">
+        Buscar propiedades
+      </button>
+    </aside>
+
+    <!-- Content area -->
+    <main class="content" id="content">
+
+      <!-- Vista: Búsqueda -->
+      <div id="view-buscar">
+        <!-- Toolbar -->
+        <div class="toolbar" id="toolbar" style="display:none">
+          <div class="toolbar-left">
+            <span class="result-count" id="result-count"></span>
+            <select class="sort-select" onchange="sortResults(this.value)">
+              <option value="score">↓ Score IA</option>
+              <option value="precio_asc">↑ Precio</option>
+              <option value="precio_desc">↓ Precio</option>
+              <option value="area_desc">↓ Área</option>
+              <option value="pm2_asc">↑ Precio/m²</option>
+            </select>
+          </div>
+          <div class="toolbar-right">
+            <button class="btn-compare" id="btn-compare" onclick="abrirComparador()" style="display:none">
+              Comparar (<span id="compare-count">0</span>)
+            </button>
+            <div class="view-toggle">
+              <button class="view-btn active" id="vbtn-grid" onclick="setGridMode('grid')">⊞</button>
+              <button class="view-btn" id="vbtn-list" onclick="setGridMode('list')">≡</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Consejo IA -->
+        <div class="consejo-banner" id="consejo-banner" style="display:none">
+          <div class="consejo-icon">💡</div>
+          <div id="consejo-text"></div>
+        </div>
+
+        <!-- Results -->
+        <div class="properties-area" id="results-area">
+          <div class="empty">
+            <div class="empty-icon">🏡</div>
+            <div class="empty-title">Configura tu búsqueda</div>
+            <div class="empty-sub">Ajusta los filtros en el panel izquierdo y presiona "Buscar propiedades"</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Vista: Favoritos -->
+      <div id="view-favoritos" style="display:none">
+        <div class="view-section">
+          <div class="view-title">⭐ Favoritos guardados</div>
+          <div class="fav-grid" id="fav-grid"></div>
+        </div>
+      </div>
+
+      <!-- Vista: Alertas -->
+      <div id="view-alertas" style="display:none">
+        <div class="view-section">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+            <div class="view-title" style="margin:0">🔔 Alertas por email</div>
+            <button class="btn-compare" onclick="abrirAlertaForm()">+ Nueva alerta</button>
+          </div>
+          <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1.25rem">
+            Cuando haya propiedades nuevas que coincidan con tus criterios, te enviamos un email automáticamente cada 6 horas.
+          </p>
+          <div class="alertas-list" id="alertas-list"></div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- Modal: Comparador -->
+<div class="overlay" id="modal-compare" style="display:none" onclick="cerrarModal('modal-compare')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <div class="modal-title">Comparar propiedades</div>
+      <button class="btn-close" onclick="cerrarModal('modal-compare')">✕</button>
+    </div>
+    <div class="modal-body" id="compare-body"></div>
+  </div>
+</div>
+
+<!-- Modal: Nueva alerta -->
+<div class="overlay" id="modal-alerta" style="display:none" onclick="cerrarModal('modal-alerta')">
+  <div class="modal" style="max-width:460px" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <div class="modal-title">🔔 Nueva alerta por email</div>
+      <button class="btn-close" onclick="cerrarModal('modal-alerta')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1.25rem">
+        Te notificaremos con los mismos filtros que tienes configurados ahora en la búsqueda.
+      </p>
+      <div class="alerta-form">
+        <div class="field">
+          <label>Tu nombre</label>
+          <input class="input" id="alerta-nombre" placeholder="Ej: Carlos">
+        </div>
+        <div class="field">
+          <label>Tu email</label>
+          <input class="input" id="alerta-email" type="email" placeholder="tu@email.com">
+        </div>
+        <button class="btn-search" onclick="crearAlerta()">Activar alerta</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Estado ─────────────────────────────────────────────────────────────────────
+let resultados    = [];
+let compareList   = [];
+let favoritosData = [];
+let gridMode      = 'grid';
+const EMOJIS      = ['🏠','🏡','🏘️','🏗️','🏢','🏰','🛖','🏚️'];
+
+// ── Navegación ─────────────────────────────────────────────────────────────────
+function setView(view) {
+  ['buscar','favoritos','alertas'].forEach(v => {
+    document.getElementById(`view-${v}`).style.display = v === view ? '' : 'none';
+    document.querySelectorAll('.nav-btn')[['buscar','favoritos','alertas'].indexOf(v)]
+      .classList.toggle('active', v === view);
+  });
+  document.getElementById('sidebar').style.display = view === 'buscar' ? '' : 'none';
+  if (view === 'favoritos') cargarFavoritos();
+  if (view === 'alertas')   cargarAlertas();
+}
+
+// ── Búsqueda ───────────────────────────────────────────────────────────────────
+async function buscar() {
+  const portales = [...document.querySelectorAll('.portal-chip.active')]
+                   .map(c => c.dataset.portal);
+  if (!portales.length) { toast('Selecciona al menos un portal', 'error'); return; }
+
+  const criterios = {
+    ciudad:           document.getElementById('ciudad').value,
+    tipo:             document.getElementById('tipo').value,
+    operacion:        document.getElementById('operacion').value,
+    precio_min:       parseInt(document.getElementById('precio_min').value) || 0,
+    precio_max:       parseInt(document.getElementById('precio_max').value) || 0,
+    area_min:         parseInt(document.getElementById('area_min').value)   || 0,
+    area_max:         parseInt(document.getElementById('area_max').value)   || 0,
+    habitaciones_min: parseInt(document.getElementById('habitaciones_min').value) || 0,
+    banos_min:        parseInt(document.getElementById('banos_min').value)  || 0,
+    estrato_min:      parseInt(document.getElementById('estrato_min').value)|| 0,
+    estrato_max:      parseInt(document.getElementById('estrato_max').value)|| 0,
+    parqueadero:      document.getElementById('parqueadero').checked,
+    portales,
+    max_resultados:   parseInt(document.getElementById('max_resultados').value) || 30,
+  };
+
+  document.getElementById('btn-buscar').disabled = true;
+  document.getElementById('toolbar').style.display = 'none';
+  document.getElementById('consejo-banner').style.display = 'none';
+  document.getElementById('results-area').innerHTML = loadingHTML(portales);
+  compareList = [];
+  actualizarBtnComparar();
+
+  try {
+    const resp = await fetch('/api/buscar', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(criterios),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+    resultados = data.resultados || [];
+
+    if (data.consejo_general) {
+      document.getElementById('consejo-text').textContent = data.consejo_general;
+      document.getElementById('consejo-banner').style.display = 'flex';
+    }
+    renderResults();
+  } catch(e) {
+    document.getElementById('results-area').innerHTML = `
+      <div class="empty">
+        <div class="empty-icon">⚠️</div>
+        <div class="empty-title">Error al buscar</div>
+        <div class="empty-sub">${e.message}</div>
+      </div>`;
+  } finally {
+    document.getElementById('btn-buscar').disabled = false;
+  }
+}
+
+function loadingHTML(portales) {
+  const dots = portales.map(p => `<div class="loading-portal-dot">${p}</div>`).join('');
+  return `<div class="loading">
+    <div class="spinner"></div>
+    <div class="loading-text">Buscando en los portales...</div>
+    <div class="loading-portales">${dots}</div>
+    <div class="loading-text" style="margin-top:0.5rem;font-size:0.72rem">
+      La IA analizará cada propiedad. Esto puede tomar 20-40 segundos.
+    </div>
+  </div>`;
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────────
+function renderResults() {
+  const area = document.getElementById('results-area');
+  document.getElementById('toolbar').style.display = 'flex';
+
+  if (!resultados.length) {
+    document.getElementById('result-count').innerHTML = '<b>0</b> propiedades';
+    area.innerHTML = `<div class="empty">
+      <div class="empty-icon">🔍</div>
+      <div class="empty-title">Sin resultados</div>
+      <div class="empty-sub">Prueba ampliando el rango de precio o área, o selecciona más portales</div>
+    </div>`;
+    return;
+  }
+
+  document.getElementById('result-count').innerHTML =
+    `<b>${resultados.length}</b> propiedades encontradas`;
+
+  const cls = gridMode === 'grid' ? 'grid' : 'list';
+  area.innerHTML = `<div class="${cls}" id="props-container">
+    ${resultados.map((p, i) => cardHTML(p, i)).join('')}
+  </div>`;
+}
+
+function cardHTML(p, i) {
+  const emoji   = EMOJIS[i % EMOJIS.length];
+  const isTop3  = p.en_top3 === '⭐ TOP 3';
+  const listMode = gridMode === 'list' ? 'list-mode' : '';
+  const badgeClass = {EXCELENTE:'badge-excelente', JUSTO:'badge-justo', ALTO:'badge-alto'}[p.evaluacion_precio] || '';
+
+  const score     = p.score_ia;
+  const scoreCls  = score >= 7 ? 'score-hi' : score >= 5 ? 'score-mid' : 'score-lo';
+  const scoreHTML = score ? `<div class="score-badge ${scoreCls}">${score}</div>` : '';
+
+  const pm2HTML = p.precio_m2
+    ? `<div class="card-pm2">$${p.precio_m2.toLocaleString('es-CO')}/m²</div>` : '';
+
+  const analysisHTML = p.analisis_ia
+    ? `<div class="card-analysis">
+         <div class="card-analysis-header">🤖 Análisis IA</div>
+         ${p.analisis_ia}
+       </div>` : '';
+
+  const isFav = favoritosData.some(f => f.url === p.url);
+
+  return `<div class="card ${listMode} ${isTop3 ? 'top3' : ''}" id="card-${i}">
+    <div class="card-img ${listMode ? 'list-mode' : ''}">
+      ${emoji}
+      ${p.evaluacion_precio && p.evaluacion_precio !== 'N/A'
+        ? `<div class="card-badge ${badgeClass}">${p.evaluacion_precio}</div>` : ''}
+      ${isTop3 ? `<div class="top3-ribbon">⭐ Top 3</div>` : ''}
+      ${scoreHTML}
+      <button class="card-fav" title="Guardar favorito" onclick="toggleFav(${i}, this)">
+        ${isFav ? '⭐' : '☆'}
+      </button>
+      <div class="card-compare-check ${compareList.includes(i)?'selected':''}"
+           title="Agregar a comparador" onclick="toggleCompare(${i}, this)">✓</div>
+    </div>
+    <div class="card-body">
+      <div class="card-price">${p.precio_fmt || 'Consultar'}</div>
+      <div class="card-title">${p.titulo}</div>
+      <div class="card-location">📍 ${p.barrio} · ${p.ciudad}</div>
+      <div class="card-specs">
+        ${p.area       ? `<span class="card-spec">📐 ${p.area}m²</span>` : ''}
+        ${p.habitaciones ? `<span class="card-spec">🛏 ${p.habitaciones}</span>` : ''}
+        ${p.banos      ? `<span class="card-spec">🚿 ${p.banos}</span>` : ''}
+        ${p.parqueadero? `<span class="card-spec">🚗 ${p.parqueadero}</span>` : ''}
+        ${p.estrato    ? `<span class="card-spec">Est.${p.estrato}</span>` : ''}
+      </div>
+      ${pm2HTML}
+      <span class="card-portal-tag">${p.portal}</span>
+      ${analysisHTML}
+      <div class="card-actions">
+        <a class="btn-sm" href="${p.url}" target="_blank" rel="noopener">Ver en ${p.portal} →</a>
+        <button class="btn-sm" onclick="toggleFav(${i}, null)">⭐ Guardar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── Sort ───────────────────────────────────────────────────────────────────────
+function sortResults(by) {
+  resultados.sort((a, b) => {
+    if (by === 'score')       return (b.score_ia || 0) - (a.score_ia || 0);
+    if (by === 'precio_asc')  return (a.precio || 0) - (b.precio || 0);
+    if (by === 'precio_desc') return (b.precio || 0) - (a.precio || 0);
+    if (by === 'area_desc')   return (b.area || 0) - (a.area || 0);
+    if (by === 'pm2_asc')     return (a.precio_m2 || 9e9) - (b.precio_m2 || 9e9);
+    return 0;
+  });
+  renderResults();
+}
+
+function setGridMode(mode) {
+  gridMode = mode;
+  document.getElementById('vbtn-grid').classList.toggle('active', mode === 'grid');
+  document.getElementById('vbtn-list').classList.toggle('active', mode === 'list');
+  if (resultados.length) renderResults();
+}
+
+// ── Favoritos ──────────────────────────────────────────────────────────────────
+async function toggleFav(idx, btn) {
+  const p = resultados[idx];
+  try {
+    await fetch('/api/favoritos', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({propiedad: p}),
+    });
+    if (btn) btn.textContent = '⭐';
+    toast('Guardado en favoritos ⭐');
+  } catch(e) {
+    toast('Error al guardar', 'error');
+  }
+}
+
+async function cargarFavoritos() {
+  try {
+    const resp = await fetch('/api/favoritos');
+    const data = await resp.json();
+    favoritosData = data.favoritos || [];
+    const grid = document.getElementById('fav-grid');
+    if (!favoritosData.length) {
+      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">
+        <div class="empty-icon">☆</div>
+        <div class="empty-title">Sin favoritos aún</div>
+        <div class="empty-sub">Guarda propiedades desde la búsqueda</div>
+      </div>`;
+      return;
+    }
+    grid.innerHTML = favoritosData.map(f => `
+      <div class="card">
+        <div class="card-img" style="height:110px;font-size:2rem">🏠
+          ${f.en_top3 ? '<div class="top3-ribbon">⭐ Top 3</div>' : ''}
+        </div>
+        <div class="card-body">
+          <div class="card-price">${f.precio_fmt || 'N/A'}</div>
+          <div class="card-title">${f.titulo}</div>
+          <div class="card-location">📍 ${f.barrio} · ${f.ciudad}</div>
+          <div class="card-specs">
+            ${f.area ? `<span class="card-spec">📐 ${f.area}m²</span>` : ''}
+            ${f.habitaciones ? `<span class="card-spec">🛏 ${f.habitaciones}</span>` : ''}
+          </div>
+          <span class="card-portal-tag">${f.portal}</span>
+          ${f.analisis_ia && f.analisis_ia !== 'Sin análisis IA' ? `
+            <div class="card-analysis"><div class="card-analysis-header">🤖 IA</div>${f.analisis_ia}</div>` : ''}
+          <div class="card-actions">
+            <a class="btn-sm" href="${f.url}" target="_blank">Ver →</a>
+            <button class="btn-sm danger" onclick="eliminarFav(${f.id})">🗑 Eliminar</button>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch(e) {
+    document.getElementById('fav-grid').innerHTML = '<p style="color:var(--red)">Error cargando favoritos</p>';
+  }
+}
+
+async function eliminarFav(id) {
+  await fetch(`/api/favoritos/${id}`, { method: 'DELETE' });
+  toast('Eliminado de favoritos');
+  cargarFavoritos();
+}
+
+// ── Comparador ─────────────────────────────────────────────────────────────────
+function toggleCompare(idx, el) {
+  if (compareList.includes(idx)) {
+    compareList = compareList.filter(i => i !== idx);
+    el.classList.remove('selected');
+  } else if (compareList.length < 3) {
+    compareList.push(idx);
+    el.classList.add('selected');
+  } else {
+    toast('Máximo 3 propiedades para comparar', 'error');
+    return;
+  }
+  actualizarBtnComparar();
+}
+
+function actualizarBtnComparar() {
+  const btn = document.getElementById('btn-compare');
+  const cnt = document.getElementById('compare-count');
+  btn.style.display = compareList.length >= 2 ? '' : 'none';
+  cnt.textContent   = compareList.length;
+}
+
+async function abrirComparador() {
+  const props = compareList.map(i => resultados[i]);
+  const body  = document.getElementById('compare-body');
+  const cols  = props.length;
+
+  const headers = props.map(p => `
+    <div class="compare-prop-header">
+      <div class="compare-prop-emoji">${EMOJIS[compareList[props.indexOf(p)] % EMOJIS.length]}</div>
+      <div class="compare-prop-name">${p.titulo}</div>
+      <div class="compare-prop-price">${p.precio_fmt}</div>
+      <span class="card-portal-tag">${p.portal}</span>
+    </div>`).join('');
+
+  const rows = [
+    {label:'Barrio',        key:'barrio'},
+    {label:'Área (m²)',     key:'area'},
+    {label:'Habitaciones',  key:'habitaciones'},
+    {label:'Baños',         key:'banos'},
+    {label:'Parqueadero',   key:'parqueadero'},
+    {label:'Estrato',       key:'estrato'},
+    {label:'Precio/m²',     key:'precio_m2', fmt: v => v ? `$${v.toLocaleString('es-CO')}` : 'N/A'},
+    {label:'Score IA',      key:'score_ia'},
+    {label:'Evaluación',    key:'evaluacion_precio'},
+  ].map(row => {
+    const vals = props.map(p => {
+      const v = p[row.key];
+      return row.fmt ? row.fmt(v) : (v || 'N/A');
+    });
+    // Highlight mejor valor numérico
+    const nums = vals.map(v => parseFloat(String(v).replace(/[^\d.]/g,'')));
+    const best = row.key === 'precio_m2' || row.key === 'precio'
+      ? Math.min(...nums.filter(n => !isNaN(n)))
+      : Math.max(...nums.filter(n => !isNaN(n)));
+    return `<div class="compare-row">
+      <div class="compare-row-label">${row.label}</div>
+      <div class="compare-row-vals" style="grid-template-columns:repeat(${cols},1fr)">
+        ${vals.map((v,i) => {
+          const n   = parseFloat(String(v).replace(/[^\d.]/g,''));
+          const best_cls = !isNaN(n) && n === best ? 'best' : '';
+          return `<div class="compare-val ${best_cls}">${v}</div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="compare-cols" style="grid-template-columns:repeat(${cols},1fr)">${headers}</div>
+    <div class="compare-rows">${rows}</div>
+    <div class="compare-ai-section">
+      <div class="card-analysis-header" style="margin-bottom:0.75rem">🤖 Recomendación IA</div>
+      <div class="compare-ai-result" id="compare-ai-result">
+        <div class="loading-text">Consultando a la IA...</div>
+      </div>
+    </div>`;
+
+  document.getElementById('modal-compare').style.display = 'flex';
+
+  // Pedir recomendación IA
+  try {
+    const desc = props.map((p, i) =>
+      `${i+1}. ${p.titulo} - ${p.barrio} - ${p.precio_fmt} - ${p.area||'?'}m² - Score:${p.score_ia||'N/A'}`
+    ).join('\n');
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514', max_tokens: 600,
+        messages: [{role:'user', content:
+          `Compara estas propiedades inmobiliarias en Colombia y recomienda cuál comprar. Sé concreto y práctico (máx 6 líneas):\n${desc}`
+        }]
+      })
+    });
+    const d = await resp.json();
+    document.getElementById('compare-ai-result').textContent =
+      d.content?.[0]?.text || 'No se pudo obtener recomendación.';
+  } catch(e) {
+    document.getElementById('compare-ai-result').textContent =
+      'Activa la API key de Anthropic en las variables de entorno del servidor para ver la recomendación IA aquí.';
+  }
+}
+
+// ── Alertas ────────────────────────────────────────────────────────────────────
+async function cargarAlertas() {
+  try {
+    const resp = await fetch('/api/alertas');
+    const data = await resp.json();
+    const list = document.getElementById('alertas-list');
+    if (!data.alertas?.length) {
+      list.innerHTML = `<div class="empty" style="padding:2rem">
+        <div class="empty-icon">🔔</div>
+        <div class="empty-title">Sin alertas activas</div>
+        <div class="empty-sub">Crea una alerta para que te avisemos cuando haya propiedades nuevas</div>
+      </div>`;
+      return;
+    }
+    list.innerHTML = data.alertas.map(a => {
+      const c = JSON.parse(a.criterios || '{}');
+      return `<div class="alerta-card">
+        <div class="alerta-info">
+          <div class="alerta-email">🔔 ${a.nombre} — ${a.email}</div>
+          <div class="alerta-criterios">
+            ${c.tipo||''} en ${c.ciudad||''} · $${(c.precio_min||0).toLocaleString()} – $${(c.precio_max||0).toLocaleString()}
+          </div>
+          <div class="alerta-date">Creada: ${a.creada_en?.split('T')[0] || 'N/A'} · ${a.activa ? '✅ Activa' : '⏸ Pausada'}</div>
+        </div>
+        <button class="btn-sm danger" onclick="eliminarAlerta(${a.id})">🗑 Eliminar</button>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('alertas-list').innerHTML = '<p style="color:var(--red)">Error cargando alertas</p>';
+  }
+}
+
+function abrirAlertaForm() {
+  document.getElementById('modal-alerta').style.display = 'flex';
+}
+
+async function crearAlerta() {
+  const email  = document.getElementById('alerta-email').value.trim();
+  const nombre = document.getElementById('alerta-nombre').value.trim();
+  if (!email || !nombre) { toast('Completa nombre y email', 'error'); return; }
+
+  const portales = [...document.querySelectorAll('.portal-chip.active')].map(c => c.dataset.portal);
+  const criterios = {
+    ciudad: document.getElementById('ciudad').value,
+    tipo: document.getElementById('tipo').value,
+    operacion: document.getElementById('operacion').value,
+    precio_min: parseInt(document.getElementById('precio_min').value) || 0,
+    precio_max: parseInt(document.getElementById('precio_max').value) || 0,
+    area_min: parseInt(document.getElementById('area_min').value) || 0,
+    area_max: parseInt(document.getElementById('area_max').value) || 0,
+    habitaciones_min: parseInt(document.getElementById('habitaciones_min').value) || 0,
+    banos_min: parseInt(document.getElementById('banos_min').value) || 0,
+    estrato_min: parseInt(document.getElementById('estrato_min').value) || 0,
+    estrato_max: parseInt(document.getElementById('estrato_max').value) || 0,
+    parqueadero: document.getElementById('parqueadero').checked,
+    portales: portales.length ? portales : ['metrocuadrado'],
+    max_resultados: 30,
+  };
+
+  try {
+    const resp = await fetch('/api/alertas', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email, nombre, criterios}),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    toast('Alerta creada ✅ Revisa tu email');
+    cerrarModal('modal-alerta');
+    cargarAlertas();
+  } catch(e) {
+    toast('Error al crear alerta', 'error');
+  }
+}
+
+async function eliminarAlerta(id) {
+  await fetch(`/api/alertas/${id}`, { method: 'DELETE' });
+  toast('Alerta eliminada');
+  cargarAlertas();
+}
+
+// ── Utils ──────────────────────────────────────────────────────────────────────
+function cerrarModal(id) {
+  document.getElementById(id).style.display = 'none';
+}
+
+function toast(msg, type = 'success') {
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+// Portal chips toggle
+document.querySelectorAll('.portal-chip').forEach(chip => {
+  chip.addEventListener('click', () => chip.classList.toggle('active'));
+});
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 """
 Nido — Agente Inmobiliario IA
-Backend FastAPI: scrapers + análisis IA + alertas email + favoritos
+Backend FastAPI: scrapers + ScraperAPI + análisis IA + favoritos + alertas
 """
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException
@@ -18,17 +18,11 @@ from bs4 import BeautifulSoup
 import anthropic
 
 app = FastAPI(title="Nido API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+SCRAPER_API_KEY   = os.environ.get("SCRAPER_API_KEY", "")
 SMTP_HOST         = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT         = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER         = os.environ.get("SMTP_USER", "")
@@ -43,11 +37,9 @@ USER_AGENTS = [
 def get_headers(referer=None):
     h = {
         "User-Agent": random.choice(USER_AGENTS),
-        "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Language": "es-CO,es;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
         "Connection": "keep-alive",
-        "Cache-Control": "max-age=0",
     }
     if referer:
         h["Referer"] = referer
@@ -63,28 +55,21 @@ def get_db():
 
 def init_db():
     db = get_db()
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS favoritos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            portal TEXT, titulo TEXT, barrio TEXT, ciudad TEXT,
-            precio INTEGER, precio_fmt TEXT, area REAL,
-            habitaciones TEXT, banos TEXT, parqueadero TEXT, estrato TEXT,
-            descripcion TEXT, url TEXT, precio_m2 INTEGER,
-            score_ia REAL, analisis_ia TEXT, en_top3 TEXT,
-            guardado_en TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS alertas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL,
-            nombre TEXT,
-            criterios TEXT NOT NULL,
-            activa INTEGER DEFAULT 1,
-            ultima_ejecucion TEXT,
-            creada_en TEXT DEFAULT (datetime('now'))
-        )
-    """)
+    db.execute("""CREATE TABLE IF NOT EXISTS favoritos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        portal TEXT, titulo TEXT, barrio TEXT, ciudad TEXT,
+        precio INTEGER, precio_fmt TEXT, area REAL,
+        habitaciones TEXT, banos TEXT, parqueadero TEXT, estrato TEXT,
+        descripcion TEXT, url TEXT, precio_m2 INTEGER,
+        score_ia REAL, analisis_ia TEXT, en_top3 TEXT,
+        guardado_en TEXT DEFAULT (datetime('now'))
+    )""")
+    db.execute("""CREATE TABLE IF NOT EXISTS alertas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL, nombre TEXT, criterios TEXT NOT NULL,
+        activa INTEGER DEFAULT 1, ultima_ejecucion TEXT,
+        creada_en TEXT DEFAULT (datetime('now'))
+    )""")
     db.commit()
     db.close()
 
@@ -159,134 +144,152 @@ def prop_base(portal, titulo, barrio, ciudad, precio, area,
     }
 
 
-# ── Scraper HTML genérico ──────────────────────────────────────────────────────
+# ── ScraperAPI — bypass Cloudflare ─────────────────────────────────────────────
 
-def _scrape_html(portal, url, criterios, max_items=10, params=None, base_url=None):
+def scraper_get(url, url_params=None):
+    """
+    Envuelve cualquier URL con ScraperAPI para evitar bloqueos.
+    Si no hay SCRAPER_API_KEY, hace la petición directa (puede fallar).
+    """
+    target = url
+    if url_params:
+        qs = "&".join(f"{k}={v}" for k, v in url_params.items())
+        target = f"{url}?{qs}"
+
+    if SCRAPER_API_KEY:
+        print(f"[ScraperAPI] {target[:80]}...")
+        return requests.get(
+            "https://api.scraperapi.com",
+            params={"api_key": SCRAPER_API_KEY, "url": target, "country_code": "co"},
+            timeout=60
+        )
+    else:
+        print(f"[Direct] {target[:80]}...")
+        return requests.get(target, headers=get_headers(), timeout=20)
+
+
+def _normalizar_item(portal, item, ciudad, base_url):
+    """Convierte un item de cualquier portal al formato estándar."""
+    precio = None
+    for k in ["salePrice", "rentPrice", "precio", "price", "canonicalPrice", "valor"]:
+        v = item.get(k)
+        if v:
+            precio = limpiar_precio(str(v))
+            if precio:
+                break
+
+    area = None
+    for k in ["area", "areaConstruida", "builtArea", "areaTotal", "metrosCuadrados"]:
+        v = item.get(k)
+        if v:
+            area = limpiar_area(str(v))
+            if area:
+                break
+
+    link = str(item.get("link") or item.get("url") or item.get("href") or "")
+    if link and not link.startswith("http"):
+        link = base_url + link
+
+    return prop_base(
+        portal,
+        item.get("titulo") or item.get("title") or item.get("nombre") or item.get("propertyType") or "Propiedad",
+        item.get("barrio") or item.get("neighborhood") or item.get("sector") or item.get("location") or item.get("localidad"),
+        item.get("ciudad") or item.get("city") or ciudad,
+        precio, area,
+        item.get("habitaciones") or item.get("bedrooms") or item.get("alcobas"),
+        item.get("banos") or item.get("bathrooms"),
+        item.get("garajes") or item.get("garages") or item.get("parqueaderos"),
+        item.get("estrato") or item.get("stratum"),
+        item.get("descripcion") or item.get("description") or item.get("comment") or "",
+        link,
+        item.get("antiguedad") or item.get("builtTime"),
+    )
+
+
+def _extraer_de_html(html_text, portal, criterios, base_url, max_items):
+    """
+    Extrae propiedades del HTML ya renderizado.
+    Intenta __NEXT_DATA__, luego JSON en scripts, luego tarjetas HTML.
+    """
     resultados = []
-    if base_url is None:
-        parts = url.split("/")
-        base_url = "/".join(parts[:3])
+    soup = BeautifulSoup(html_text, "html.parser")
 
-    try:
-        session = requests.Session()
-        session.get(base_url, headers=get_headers(), timeout=10)
-        time.sleep(0.8)
-        resp = session.get(url, params=params or {}, headers=get_headers(base_url + "/"), timeout=20)
-        print(f"[{portal} HTML] status: {resp.status_code}, size: {len(resp.text)}")
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Intento 1: __NEXT_DATA__
-        script = soup.find("script", id="__NEXT_DATA__")
-        if script and script.string:
-            try:
-                data = json.loads(script.string)
-                page_props = data.get("props", {}).get("pageProps", {})
-                items = (
-                    page_props.get("listings") or
-                    page_props.get("inmuebles") or
-                    page_props.get("results") or
-                    page_props.get("data", {}).get("listings") or
-                    page_props.get("data", {}).get("inmuebles") or
-                    page_props.get("searchResults", {}).get("listings") or
-                    []
-                )
-                print(f"[{portal} __NEXT_DATA__] {len(items)} items")
-                for item in items[:max_items]:
-                    precio = limpiar_precio(str(
-                        item.get("precio") or item.get("price") or
-                        item.get("salePrice") or item.get("canonicalPrice") or ""
-                    ))
-                    area = limpiar_area(str(
-                        item.get("area") or item.get("areaConstruida") or
-                        item.get("builtArea") or ""
-                    ))
-                    link = str(item.get("url") or item.get("link") or item.get("href") or "")
-                    if link and not link.startswith("http"):
-                        link = base_url + link
-                    resultados.append(prop_base(
-                        portal,
-                        item.get("titulo") or item.get("title") or item.get("nombre"),
-                        item.get("barrio") or item.get("neighborhood") or item.get("sector"),
-                        item.get("ciudad", criterios.ciudad),
-                        precio, area,
-                        item.get("habitaciones") or item.get("bedrooms") or item.get("alcobas"),
-                        item.get("banos") or item.get("bathrooms"),
-                        item.get("garajes") or item.get("garages") or item.get("parqueaderos"),
-                        item.get("estrato") or item.get("stratum"),
-                        item.get("descripcion") or item.get("description") or item.get("comment") or "",
-                        link,
-                        item.get("antiguedad") or item.get("builtTime"),
-                    ))
-            except Exception as e:
-                print(f"[{portal} __NEXT_DATA__] Error: {e}")
-
-        # Intento 2: JSON en scripts inline
-        if not resultados:
-            for scr in soup.find_all("script"):
-                src = scr.string or ""
-                if len(src) > 500 and ("precio" in src or "price" in src):
-                    for key in ['"listings"', '"inmuebles"', '"results"']:
-                        match = re.search(key + r'\s*:\s*(\[.+?\])\s*[,}]', src, re.DOTALL)
-                        if match:
-                            try:
-                                items = json.loads(match.group(1))
-                                print(f"[{portal} script JSON] {len(items)} items")
-                                for item in items[:max_items]:
-                                    precio = limpiar_precio(str(item.get("precio") or item.get("price") or ""))
-                                    area   = limpiar_area(str(item.get("area") or ""))
-                                    link   = str(item.get("url") or item.get("link") or "")
-                                    if link and not link.startswith("http"):
-                                        link = base_url + link
-                                    resultados.append(prop_base(
-                                        portal,
-                                        item.get("titulo") or item.get("title") or "Propiedad",
-                                        item.get("barrio") or item.get("sector"),
-                                        criterios.ciudad, precio, area,
-                                        item.get("habitaciones") or item.get("bedrooms"),
-                                        item.get("banos") or item.get("bathrooms"),
-                                        item.get("garajes"), item.get("estrato"),
-                                        item.get("descripcion") or "",
-                                        link,
-                                    ))
-                                break
-                            except:
-                                continue
-                    if resultados:
-                        break
-
-        # Intento 3: tarjetas HTML
-        if not resultados:
-            selectors = "div[class*='card'], article[class*='listing'], div[class*='property'], div[class*='inmueble'], li[class*='result']"
-            cards = soup.select(selectors)
-            print(f"[{portal} HTML cards] {len(cards)} tarjetas")
-            for card in cards[:max_items]:
+    # Intento 1: __NEXT_DATA__
+    script = soup.find("script", id="__NEXT_DATA__")
+    if script and script.string:
+        try:
+            data = json.loads(script.string)
+            pp   = data.get("props", {}).get("pageProps", {})
+            items = (
+                pp.get("listings") or pp.get("inmuebles") or pp.get("results") or
+                pp.get("data", {}).get("listings") or pp.get("data", {}).get("inmuebles") or []
+            )
+            print(f"[{portal} __NEXT_DATA__] {len(items)} items")
+            for item in items[:max_items]:
                 try:
-                    pe    = card.select_one("[class*='price'],[class*='precio'],[class*='valor']")
-                    te    = card.select_one("h2,h3,[class*='title'],[class*='titulo'],[class*='nombre']")
-                    le    = card.select_one("a[href]")
-                    ae    = card.select_one("[class*='area']")
-                    he    = card.select_one("[class*='habitacion'],[class*='bedroom'],[class*='alcoba']")
-                    precio = limpiar_precio(pe.text) if pe else None
-                    area   = limpiar_area(ae.text)   if ae else None
-                    link   = le["href"] if le else ""
-                    if link and not link.startswith("http"):
-                        link = base_url + link
-                    resultados.append(prop_base(
-                        portal,
-                        te.text.strip() if te else "Propiedad",
-                        "Ver enlace", criterios.ciudad, precio, area,
-                        he.text.strip() if he else None,
-                        None, None, None,
-                        card.text.strip()[:200],
-                        link or url,
-                    ))
+                    resultados.append(_normalizar_item(portal, item, criterios.ciudad, base_url))
                 except:
                     continue
+        except Exception as e:
+            print(f"[{portal} __NEXT_DATA__] Error: {e}")
 
-        print(f"[{portal}] Total: {len(resultados)} resultados")
+    # Intento 2: JSON embebido en scripts
+    if not resultados:
+        for scr in soup.find_all("script"):
+            src = scr.string or ""
+            if len(src) < 200:
+                continue
+            if not ("precio" in src or "salePrice" in src or "price" in src):
+                continue
+            for key in ['"listings"', '"inmuebles"', '"results"']:
+                m = re.search(re.escape(key) + r'\s*:\s*(\[.+?\])\s*[,}]', src, re.DOTALL)
+                if m:
+                    try:
+                        items = json.loads(m.group(1))
+                        print(f"[{portal} script JSON] {len(items)} items")
+                        for item in items[:max_items]:
+                            try:
+                                resultados.append(_normalizar_item(portal, item, criterios.ciudad, base_url))
+                            except:
+                                continue
+                        if resultados:
+                            break
+                    except:
+                        continue
+            if resultados:
+                break
 
-    except Exception as e:
-        print(f"[{portal}] Error general: {e}")
+    # Intento 3: tarjetas HTML
+    if not resultados:
+        cards = soup.select(
+            "div[class*='card'], article[class*='listing'], "
+            "div[class*='property'], div[class*='inmueble'], li[class*='result']"
+        )
+        print(f"[{portal} HTML cards] {len(cards)} tarjetas")
+        for card in cards[:max_items]:
+            try:
+                pe = card.select_one("[class*='price'],[class*='precio'],[class*='valor']")
+                te = card.select_one("h2,h3,[class*='title'],[class*='titulo'],[class*='nombre']")
+                le = card.select_one("a[href]")
+                ae = card.select_one("[class*='area']")
+                he = card.select_one("[class*='habitacion'],[class*='bedroom'],[class*='alcoba']")
+                precio = limpiar_precio(pe.text) if pe else None
+                area   = limpiar_area(ae.text)   if ae else None
+                link   = le["href"] if le else ""
+                if link and not link.startswith("http"):
+                    link = base_url + link
+                resultados.append(prop_base(
+                    portal,
+                    te.text.strip() if te else "Propiedad",
+                    "Ver enlace", criterios.ciudad,
+                    precio, area,
+                    he.text.strip() if he else None,
+                    None, None, None,
+                    card.text.strip()[:200],
+                    link or base_url,
+                ))
+            except:
+                continue
 
     return resultados
 
@@ -296,66 +299,52 @@ def _scrape_html(portal, url, criterios, max_items=10, params=None, base_url=Non
 def scrape_metrocuadrado(criterios: CriteriosBusqueda, max_items=10):
     resultados = []
     tipo_map = {"apartamento": "Apartamento", "casa": "Casa", "oficina": "Oficina", "lote": "Lote"}
-    params = {
-        "realEstateTypeList": tipo_map.get(criterios.tipo, "Apartamento"),
-        "realEstateBusinessList": "Venta" if criterios.operacion == "venta" else "Arriendo",
-        "city": criterios.ciudad.capitalize(),
-        "from": 0,
-        "size": max_items,
-    }
-    if criterios.precio_min: params["minimumPrice"]    = criterios.precio_min
-    if criterios.precio_max: params["maximumPrice"]    = criterios.precio_max
-    if criterios.area_min:   params["minimumArea"]     = criterios.area_min
-    if criterios.area_max:   params["maximumArea"]     = criterios.area_max
-    if criterios.habitaciones_min: params["minimumBedrooms"]  = criterios.habitaciones_min
-    if criterios.banos_min:        params["minimumBathrooms"] = criterios.banos_min
 
+    # Intento 1: API REST de Metrocuadrado
     try:
-        session = requests.Session()
-        session.get("https://www.metrocuadrado.com", headers=get_headers(), timeout=10)
-        time.sleep(0.5)
-        api_headers = {**get_headers("https://www.metrocuadrado.com/"), "x-api-key": "P1MfFHfQMOtL16Zpg36NmT6uh", "Accept": "application/json"}
-        resp = session.get("https://www.metrocuadrado.com/rest-search/search", params=params, headers=api_headers, timeout=20)
-        print(f"[Metrocuadrado] API status: {resp.status_code}")
+        api_params = {
+            "realEstateTypeList":     tipo_map.get(criterios.tipo, "Apartamento"),
+            "realEstateBusinessList": "Venta" if criterios.operacion == "venta" else "Arriendo",
+            "city": criterios.ciudad.capitalize(),
+            "from": 0, "size": max_items,
+        }
+        if criterios.precio_min:       api_params["minimumPrice"]    = criterios.precio_min
+        if criterios.precio_max:       api_params["maximumPrice"]    = criterios.precio_max
+        if criterios.area_min:         api_params["minimumArea"]     = criterios.area_min
+        if criterios.habitaciones_min: api_params["minimumBedrooms"] = criterios.habitaciones_min
 
-        if resp.status_code == 200:
+        resp = scraper_get("https://www.metrocuadrado.com/rest-search/search", api_params)
+        print(f"[Metrocuadrado API] status={resp.status_code} size={len(resp.text)}")
+
+        if resp.status_code == 200 and resp.text.strip().startswith("{"):
             items = resp.json().get("results", [])
-            print(f"[Metrocuadrado] {len(items)} items")
+            print(f"[Metrocuadrado API] {len(items)} items")
             for item in items:
                 try:
-                    precio = item.get("salePrice") or item.get("rentPrice")
-                    area   = item.get("area") or item.get("builtArea")
-                    resultados.append(prop_base(
-                        "Metrocuadrado",
-                        f"{item.get('propertyType','')} en {item.get('city','')}",
-                        item.get("neighborhood", item.get("location")),
-                        item.get("city", criterios.ciudad),
-                        precio, area,
-                        item.get("bedrooms"), item.get("bathrooms"),
-                        item.get("garages", 0), item.get("stratum"),
-                        item.get("comment", ""),
-                        "https://www.metrocuadrado.com" + item.get("link", ""),
-                        item.get("builtTime"),
-                    ))
+                    resultados.append(_normalizar_item("Metrocuadrado", item, criterios.ciudad, "https://www.metrocuadrado.com"))
                 except:
                     continue
-        else:
-            print(f"[Metrocuadrado] API bloqueada, usando HTML...")
+    except Exception as e:
+        print(f"[Metrocuadrado API] Error: {e}")
+
+    # Intento 2: página HTML de resultados
+    if not resultados:
+        try:
             tipo_url = {"apartamento": "apartamento", "casa": "casas", "oficina": "oficinas", "lote": "lotes"}.get(criterios.tipo, "apartamento")
             op_url   = "venta" if criterios.operacion == "venta" else "arriendo"
-            resultados.extend(_scrape_html(
-                "Metrocuadrado",
-                f"https://www.metrocuadrado.com/{tipo_url}/{op_url}/{criterios.ciudad}/",
-                criterios, max_items,
-                base_url="https://www.metrocuadrado.com",
-            ))
-    except Exception as e:
-        print(f"[Metrocuadrado] Error: {e}")
+            url      = f"https://www.metrocuadrado.com/{tipo_url}/{op_url}/{criterios.ciudad}/"
+            resp = scraper_get(url)
+            print(f"[Metrocuadrado HTML] status={resp.status_code} size={len(resp.text)}")
+            resultados = _extraer_de_html(resp.text, "Metrocuadrado", criterios, "https://www.metrocuadrado.com", max_items)
+        except Exception as e:
+            print(f"[Metrocuadrado HTML] Error: {e}")
 
+    print(f"[Metrocuadrado] Total: {len(resultados)}")
     return resultados
 
 
 def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
+    resultados = []
     ciudad_map = {
         "bogota": "bogota-dc", "medellin": "antioquia/medellin",
         "cali": "valle-del-cauca/cali", "barranquilla": "atlantico/barranquilla",
@@ -364,14 +353,22 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
     ciudad_url = ciudad_map.get(criterios.ciudad, criterios.ciudad)
     url = f"https://www.fincaraiz.com.co/{criterios.tipo}/{criterios.operacion}/{ciudad_url}/"
     params = {}
-    if criterios.precio_min: params["precio-desde"]  = criterios.precio_min
-    if criterios.precio_max: params["precio-hasta"]  = criterios.precio_max
-    if criterios.area_min:   params["area-desde"]    = criterios.area_min
+    if criterios.precio_min:       params["precio-desde"] = criterios.precio_min
+    if criterios.precio_max:       params["precio-hasta"] = criterios.precio_max
+    if criterios.area_min:         params["area-desde"]   = criterios.area_min
     if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
-    return _scrape_html("Finca Raíz", url, criterios, max_items, params=params, base_url="https://www.fincaraiz.com.co")
+    try:
+        resp = scraper_get(url, params)
+        print(f"[FincaRaiz] status={resp.status_code} size={len(resp.text)}")
+        resultados = _extraer_de_html(resp.text, "Finca Raíz", criterios, "https://www.fincaraiz.com.co", max_items)
+    except Exception as e:
+        print(f"[FincaRaiz] Error: {e}")
+    print(f"[FincaRaiz] Total: {len(resultados)}")
+    return resultados
 
 
 def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
+    resultados = []
     ciudad_slug_map = {
         "bogota": "bogota", "medellin": "medellin",
         "cali": "cali", "barranquilla": "barranquilla", "cartagena": "cartagena",
@@ -379,11 +376,18 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
     ciudad_slug = ciudad_slug_map.get(criterios.ciudad, criterios.ciudad)
     url = f"https://www.ciencuadras.com/{criterios.operacion}/{criterios.tipo}/{ciudad_slug}"
     params = {}
-    if criterios.precio_min: params["precio_min"]        = criterios.precio_min
-    if criterios.precio_max: params["precio_max"]        = criterios.precio_max
-    if criterios.area_min:   params["area_min"]          = criterios.area_min
+    if criterios.precio_min:       params["precio_min"]   = criterios.precio_min
+    if criterios.precio_max:       params["precio_max"]   = criterios.precio_max
+    if criterios.area_min:         params["area_min"]     = criterios.area_min
     if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
-    return _scrape_html("Ciencuadras", url, criterios, max_items, params=params, base_url="https://www.ciencuadras.com")
+    try:
+        resp = scraper_get(url, params)
+        print(f"[Ciencuadras] status={resp.status_code} size={len(resp.text)}")
+        resultados = _extraer_de_html(resp.text, "Ciencuadras", criterios, "https://www.ciencuadras.com", max_items)
+    except Exception as e:
+        print(f"[Ciencuadras] Error: {e}")
+    print(f"[Ciencuadras] Total: {len(resultados)}")
+    return resultados
 
 
 # ── Filtros ────────────────────────────────────────────────────────────────────
@@ -419,7 +423,7 @@ def analizar_con_ia(propiedades, criterios: CriteriosBusqueda):
                       "en_top3": "", "razon_top3": ""})
         return propiedades
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     props_text = ""
     for i, p in enumerate(propiedades):
         props_text += (
@@ -435,21 +439,18 @@ Precio: ${criterios.precio_min:,} - ${criterios.precio_max:,} | Área: {criterio
 Propiedades:
 {props_text}
 
-Responde SOLO con este JSON válido, sin texto adicional:
+Responde SOLO con JSON válido, sin texto adicional:
 {{
   "analisis": [
-    {{"numero":1,"evaluacion_precio":"EXCELENTE","score":8,"resumen":"...","pros":["..."],"cons":["..."]}},
-    {{"numero":2,"evaluacion_precio":"JUSTO","score":7,"resumen":"...","pros":["..."],"cons":["..."]}}
+    {{"numero":1,"evaluacion_precio":"EXCELENTE","score":8,"resumen":"...","pros":["..."],"cons":["..."]}}
   ],
   "top3": [{{"numero":1,"razon":"..."}},{{"numero":2,"razon":"..."}},{{"numero":3,"razon":"..."}}],
   "consejo_general":"..."
 }}"""
 
     try:
-        msg = client.messages.create(
-            model="claude-sonnet-4-20250514", max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        msg        = client.messages.create(model="claude-sonnet-4-20250514", max_tokens=2000,
+                       messages=[{"role": "user", "content": prompt}])
         respuesta  = msg.content[0].text
         json_match = re.search(r"\{[\s\S]+\}", respuesta)
         if json_match:
@@ -472,19 +473,30 @@ Responde SOLO con este JSON válido, sin texto adicional:
         print(f"[IA] Error: {e}")
         for p in propiedades:
             p.update({"score_ia": None, "analisis_ia": str(e), "en_top3": "", "razon_top3": ""})
-
     return propiedades
 
 
 # ── Email ──────────────────────────────────────────────────────────────────────
 
-def enviar_email_alerta(email_dest, nombre, propiedades, criterios_dict):
+def _send_email(to, subject, html_body):
     if not SMTP_USER or not SMTP_PASS:
         return
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = to
+    msg.attach(MIMEText(html_body, "html"))
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+        s.starttls()
+        s.login(SMTP_USER, SMTP_PASS)
+        s.sendmail(SMTP_USER, to, msg.as_string())
+
+def enviar_email_alerta(email_dest, nombre, propiedades, criterios_dict):
     try:
         lista = [p for p in propiedades if p.get("en_top3") and not p.get("_meta")][:3] or propiedades[:5]
         filas = "".join([
-            f"<tr><td style='padding:10px'><b>{p.get('titulo','')}</b><br><small>{p.get('barrio','')} · {p.get('portal','')}</small></td>"
+            f"<tr><td style='padding:10px'><b>{p.get('titulo','')}</b><br>"
+            f"<small>{p.get('barrio','')} · {p.get('portal','')}</small></td>"
             f"<td style='padding:10px;color:#c9a84c'>{p.get('precio_fmt','N/A')}</td>"
             f"<td style='padding:10px'>{p.get('area','?')}m²</td>"
             f"<td style='padding:10px'><a href='{p.get('url','#')}' style='color:#c9a84c'>Ver →</a></td></tr>"
@@ -492,40 +504,21 @@ def enviar_email_alerta(email_dest, nombre, propiedades, criterios_dict):
         ])
         html = f"""<div style="font-family:Georgia,serif;max-width:600px;background:#0f0e0c;color:#f0ece4;padding:30px;border-radius:12px">
           <h1 style="color:#c9a84c">🏠 Nido</h1>
-          <p>Hola <b>{nombre}</b>, encontramos {len(propiedades)} propiedades nuevas:</p>
+          <p>Hola <b>{nombre}</b>, encontramos {len(propiedades)} propiedades nuevas en {criterios_dict.get('ciudad','').capitalize()}:</p>
           <table style="width:100%;border-collapse:collapse">{filas}</table>
-          <p style="color:#555;font-size:12px">Nido · Agente Inmobiliario IA</p>
-        </div>"""
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"🏠 Nido: Propiedades en {criterios_dict.get('ciudad','').capitalize()}"
-        msg["From"]    = SMTP_USER
-        msg["To"]      = email_dest
-        msg.attach(MIMEText(html, "html"))
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, email_dest, msg.as_string())
+          <p style="color:#555;font-size:12px">Nido · Agente Inmobiliario IA</p></div>"""
+        _send_email(email_dest, f"🏠 Nido: Propiedades en {criterios_dict.get('ciudad','').capitalize()}", html)
+        print(f"[Email] Enviado a {email_dest}")
     except Exception as e:
         print(f"[Email] Error: {e}")
 
-
 def enviar_email_confirmacion(email, nombre, criterios_dict):
-    if not SMTP_USER or not SMTP_PASS:
-        return
     try:
         html = f"""<div style="font-family:Georgia,serif;max-width:500px;background:#0f0e0c;color:#f0ece4;padding:30px;border-radius:12px">
           <h1 style="color:#c9a84c">🏠 Alerta activada</h1>
-          <p>Hola <b>{nombre}</b>, recibirás alertas de {criterios_dict.get('tipo','')} en {criterios_dict.get('ciudad','')}.</p>
-        </div>"""
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = "🏠 Nido: Alerta activada"
-        msg["From"]    = SMTP_USER
-        msg["To"]      = email
-        msg.attach(MIMEText(html, "html"))
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
-            s.starttls()
-            s.login(SMTP_USER, SMTP_PASS)
-            s.sendmail(SMTP_USER, email, msg.as_string())
+          <p>Hola <b>{nombre}</b>, te notificaremos de {criterios_dict.get('tipo','')} en {criterios_dict.get('ciudad','')}.</p>
+          <p style="color:#555;font-size:12px">Nido · Agente Inmobiliario IA</p></div>"""
+        _send_email(email, "🏠 Nido: Alerta activada", html)
     except Exception as e:
         print(f"[Email confirmación] {e}")
 
@@ -583,10 +576,10 @@ def diagnostico():
         "fincaraiz":     "https://www.fincaraiz.com.co",
         "ciencuadras":   "https://www.ciencuadras.com",
     }
-    resultado = {}
+    resultado = {"scraper_api_configurada": bool(SCRAPER_API_KEY)}
     for nombre, url in portales.items():
         try:
-            resp = requests.get(url, headers=get_headers(), timeout=10)
+            resp = scraper_get(url)
             resultado[nombre] = {
                 "status": resp.status_code,
                 "ok": resp.status_code == 200,
@@ -615,7 +608,8 @@ def buscar(criterios: CriteriosBusqueda):
     filtrados = aplicar_filtros(todos, criterios)
 
     if not filtrados:
-        return {"resultados": [], "total": 0, "consejo_general": "No se encontraron propiedades. Intenta ampliar el rango de precio o área."}
+        return {"resultados": [], "total": 0,
+                "consejo_general": "No se encontraron propiedades. Intenta ampliar el rango de precio o área."}
 
     filtrados = analizar_con_ia(filtrados, criterios)
 
@@ -636,12 +630,10 @@ def guardar_favorito(req: FavoritoRequest):
     p  = req.propiedad
     db = get_db()
     try:
-        db.execute("""
-            INSERT INTO favoritos (portal,titulo,barrio,ciudad,precio,precio_fmt,area,
-                habitaciones,banos,parqueadero,estrato,descripcion,url,precio_m2,
-                score_ia,analisis_ia,en_top3)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
+        db.execute("""INSERT INTO favoritos
+            (portal,titulo,barrio,ciudad,precio,precio_fmt,area,habitaciones,banos,
+             parqueadero,estrato,descripcion,url,precio_m2,score_ia,analisis_ia,en_top3)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
             p.get("portal"), p.get("titulo"), p.get("barrio"), p.get("ciudad"),
             p.get("precio"), p.get("precio_fmt"), p.get("area"),
             str(p.get("habitaciones","")), str(p.get("banos","")),
@@ -656,14 +648,12 @@ def guardar_favorito(req: FavoritoRequest):
     finally:
         db.close()
 
-
 @app.get("/api/favoritos")
 def listar_favoritos():
     db   = get_db()
     rows = db.execute("SELECT * FROM favoritos ORDER BY guardado_en DESC").fetchall()
     db.close()
     return {"favoritos": [dict(r) for r in rows]}
-
 
 @app.delete("/api/favoritos/{fav_id}")
 def eliminar_favorito(fav_id: int):
@@ -673,15 +663,12 @@ def eliminar_favorito(fav_id: int):
     db.close()
     return {"ok": True}
 
-
 @app.post("/api/alertas")
 def crear_alerta(req: AlertaRequest, background_tasks: BackgroundTasks):
     db = get_db()
     try:
-        db.execute(
-            "INSERT INTO alertas (email,nombre,criterios) VALUES (?,?,?)",
-            (req.email, req.nombre, json.dumps(req.criterios.dict()))
-        )
+        db.execute("INSERT INTO alertas (email,nombre,criterios) VALUES (?,?,?)",
+                   (req.email, req.nombre, json.dumps(req.criterios.dict())))
         db.commit()
         background_tasks.add_task(enviar_email_confirmacion, req.email, req.nombre, req.criterios.dict())
         return {"ok": True, "mensaje": f"Alerta creada para {req.email}"}
@@ -690,14 +677,12 @@ def crear_alerta(req: AlertaRequest, background_tasks: BackgroundTasks):
     finally:
         db.close()
 
-
 @app.get("/api/alertas")
 def listar_alertas():
     db   = get_db()
     rows = db.execute("SELECT id,email,nombre,activa,creada_en FROM alertas").fetchall()
     db.close()
     return {"alertas": [dict(r) for r in rows]}
-
 
 @app.delete("/api/alertas/{alerta_id}")
 def eliminar_alerta(alerta_id: int):

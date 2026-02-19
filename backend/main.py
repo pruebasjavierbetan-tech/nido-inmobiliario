@@ -703,26 +703,44 @@ def html_muestra(portal: str):
         if script and script.string:
             data      = json.loads(script.string)
             pp        = data.get("props", {}).get("pageProps", {})
-            # Mostrar solo las claves disponibles y una muestra del primer item
-            claves    = list(pp.keys())
-            primer    = None
-            for k in ["listings", "inmuebles", "results", "data"]:
-                items = pp.get(k)
-                if isinstance(items, list) and items:
-                    primer = items[0]
-                    break
-                if isinstance(items, dict):
-                    for subk in ["listings", "inmuebles", "results"]:
-                        subitems = items.get(subk)
-                        if isinstance(subitems, list) and subitems:
-                            primer = subitems[0]
-                            break
+            # Mostrar estructura detallada para depuración
+            claves = list(pp.keys())
+
+            # Explorar fetchResult
+            fetch  = pp.get("fetchResult") or {}
+            fetch_keys = list(fetch.keys()) if isinstance(fetch, dict) else str(type(fetch))
+            fetch_muestra = {}
+            if isinstance(fetch, dict):
+                for k, v in list(fetch.items())[:3]:
+                    if isinstance(v, dict):
+                        fetch_muestra[k] = {"keys": list(v.keys())[:10], "muestra": {kk: vv for kk, vv in list(v.items())[:5] if not isinstance(vv, (dict,list))}}
+                    elif isinstance(v, list) and v:
+                        fetch_muestra[k] = {"tipo": "lista", "len": len(v), "primer_item_keys": list(v[0].keys())[:15] if isinstance(v[0], dict) else str(v[0])[:200]}
+
+            # Explorar apolloState: buscar primer item tipo Listing
+            apollo = pp.get("apolloState") or {}
+            apollo_types = {}
+            primer_listing = None
+            for key, val in list(apollo.items())[:200]:
+                if isinstance(val, dict):
+                    t = val.get("__typename", "")
+                    apollo_types[t] = apollo_types.get(t, 0) + 1
+                    if not primer_listing and t in ("Listing", "Inmueble", "Property", "RealEstate", "Ad"):
+                        primer_listing = {"key": key, "data": val}
+
+            # FiltersContextInitialState
+            filters = pp.get("FiltersContextInitialState") or {}
+            filters_keys = list(filters.keys())[:15] if isinstance(filters, dict) else []
+
             return {
                 "portal": portal,
                 "size_kb": round(len(resp.text) / 1024),
-                "tiene_next_data": True,
                 "pageProps_keys": claves,
-                "primer_item": primer,
+                "fetchResult_keys": fetch_keys,
+                "fetchResult_muestra": fetch_muestra,
+                "apolloState_types": apollo_types,
+                "apolloState_primer_listing": primer_listing,
+                "filtersContext_keys": filters_keys,
             }
         else:
             # Sin __NEXT_DATA__: mostrar primeras clases CSS encontradas

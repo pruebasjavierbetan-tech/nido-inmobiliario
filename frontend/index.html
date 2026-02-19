@@ -721,11 +721,16 @@ async function buscar() {
   actualizarBtnComparar();
 
   try {
+    // Timeout largo: ScraperAPI premium puede tardar 30s por portal
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 180000); // 3 minutos
     const resp = await fetch('/api/buscar', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(criterios),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     if (!resp.ok) throw new Error(await resp.text());
     const data = await resp.json();
     resultados = data.resultados || [];

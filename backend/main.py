@@ -146,10 +146,10 @@ def prop_base(portal, titulo, barrio, ciudad, precio, area,
 
 # ── ScraperAPI — bypass Cloudflare ─────────────────────────────────────────────
 
-def scraper_get(url, url_params=None):
+def scraper_get(url, url_params=None, premium=False):
     """
     Envuelve cualquier URL con ScraperAPI para evitar bloqueos.
-    Si no hay SCRAPER_API_KEY, hace la petición directa (puede fallar).
+    premium=True para dominios protegidos con Cloudflare (Metrocuadrado, FincaRaiz).
     """
     target = url
     if url_params:
@@ -157,12 +157,11 @@ def scraper_get(url, url_params=None):
         target = f"{url}?{qs}"
 
     if SCRAPER_API_KEY:
-        print(f"[ScraperAPI] {target[:80]}...")
-        return requests.get(
-            "https://api.scraperapi.com",
-            params={"api_key": SCRAPER_API_KEY, "url": target, "country_code": "co"},
-            timeout=60
-        )
+        print(f"[ScraperAPI{'★' if premium else ''}] {target[:80]}...")
+        p = {"api_key": SCRAPER_API_KEY, "url": target, "country_code": "co"}
+        if premium:
+            p["premium"] = "true"
+        return requests.get("https://api.scraperapi.com", params=p, timeout=90)
     else:
         print(f"[Direct] {target[:80]}...")
         return requests.get(target, headers=get_headers(), timeout=20)
@@ -326,7 +325,7 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
     if criterios.area_min:         params["area-desde"]   = criterios.area_min
     if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
     try:
-        resp = scraper_get(url, params)
+        resp = scraper_get(url, params, premium=True)
         print(f"[FincaRaiz] status={resp.status_code} size={len(resp.text)}")
         soup = BeautifulSoup(resp.text, "html.parser")
         script = soup.find("script", id="__NEXT_DATA__")
@@ -722,14 +721,13 @@ def analizar_con_ia(propiedades, criterios: CriteriosBusqueda):
                       "en_top3": "", "razon_top3": ""})
         return propiedades
 
-    # Crear cliente limpio sin proxies (ScraperAPI puede inyectar HTTP_PROXY)
-    import os as _os
-    _env_backup = {}
-    for _k in ["HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy"]:
-        if _k in _os.environ:
-            _env_backup[_k] = _os.environ.pop(_k)
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    _os.environ.update(_env_backup)
+    # Crear cliente con httpx sin proxies (ScraperAPI inyecta HTTP_PROXY que rompe anthropic)
+    try:
+        import httpx
+        http_client = httpx.Client(proxy=None, timeout=60)
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, http_client=http_client)
+    except Exception:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     props_text = ""
     for i, p in enumerate(propiedades):
         props_text += (

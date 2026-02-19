@@ -779,8 +779,8 @@ function cardHTML(p, i) {
   const isFav = favoritosData.some(f => f.url === p.url);
 
   return `<div class="card ${listMode} ${isTop3 ? 'top3' : ''}" id="card-${i}">
-    <div class="card-img ${listMode ? 'list-mode' : ''}">
-      ${emoji}
+    <div class="card-img ${listMode ? 'list-mode' : ''}" style="${p.imagen ? 'background:url(' + p.imagen + ') center/cover no-repeat;font-size:0' : ''}">
+      ${p.imagen ? '' : emoji}
       ${p.evaluacion_precio && p.evaluacion_precio !== 'N/A'
         ? `<div class="card-badge ${badgeClass}">${p.evaluacion_precio}</div>` : ''}
       ${isTop3 ? `<div class="top3-ribbon">⭐ Top 3</div>` : ''}

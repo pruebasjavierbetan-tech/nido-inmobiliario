@@ -397,26 +397,41 @@ body {
     <aside class="sidebar" id="sidebar">
       <div>
         <div class="sidebar-section-label">Ubicación</div>
-        <div class="field">
+        <div class="field" style="position:relative">
           <label>Ciudad</label>
-          <input class="input" id="ciudad" type="text" placeholder="Ej: Bogotá, Cali, Pereira..." value="bogota" list="ciudades-list">
-          <datalist id="ciudades-list">
-            <option value="bogota">
-            <option value="medellin">
-            <option value="cali">
-            <option value="barranquilla">
-            <option value="cartagena">
-            <option value="bucaramanga">
-            <option value="pereira">
-            <option value="manizales">
-            <option value="santa marta">
-            <option value="cucuta">
-            <option value="ibague">
-            <option value="villavicencio">
-            <option value="pasto">
-            <option value="armenia">
-            <option value="neiva">
-          </datalist>
+          <select class="select" id="ciudad">
+            <option value="bogota">Bogotá</option>
+            <option value="medellin">Medellín</option>
+            <option value="cali">Cali</option>
+            <option value="barranquilla">Barranquilla</option>
+            <option value="cartagena">Cartagena</option>
+            <option value="bucaramanga">Bucaramanga</option>
+            <option value="santa marta">Santa Marta</option>
+            <option value="pereira">Pereira</option>
+            <option value="manizales">Manizales</option>
+            <option value="cucuta">Cúcuta</option>
+            <option value="ibague">Ibagué</option>
+            <option value="villavicencio">Villavicencio</option>
+            <option value="pasto">Pasto</option>
+            <option value="armenia">Armenia</option>
+            <option value="neiva">Neiva</option>
+            <option value="monteria">Montería</option>
+            <option value="sincelejo">Sincelejo</option>
+            <option value="valledupar">Valledupar</option>
+            <option value="riohacha">Riohacha</option>
+            <option value="florencia">Florencia</option>
+            <option value="popayan">Popayán</option>
+            <option value="tunja">Tunja</option>
+            <option value="yopal">Yopal</option>
+            <option value="mocoa">Mocoa</option>
+            <option value="mitu">Mitú</option>
+            <option value="inirida">Inírida</option>
+            <option value="puerto carreno">Puerto Carreño</option>
+            <option value="san jose del guaviare">San José del Guaviare</option>
+            <option value="otra">✏️ Otra ciudad...</option>
+          </select>
+          <input class="input" id="ciudad-custom" type="text" placeholder="Escribe el nombre de la ciudad"
+            style="margin-top:6px;display:none">
         </div>
       </div>
 
@@ -526,10 +541,8 @@ body {
           <button class="portal-chip active" data-portal="metrocuadrado">Metrocuadrado</button>
           <button class="portal-chip active" data-portal="fincaraiz">Finca Raíz</button>
           <button class="portal-chip active" data-portal="ciencuadras">Ciencuadras</button>
+          <button class="portal-chip" data-portal="facebook">Facebook Mktp</button>
         </div>
-        <p style="font-size:0.65rem;color:var(--muted);margin-top:0.5rem">
-          Facebook Marketplace requiere configuración extra (ver manual)
-        </p>
       </div>
 
       <hr class="divider">
@@ -682,7 +695,9 @@ async function buscar() {
   if (!portales.length) { toast('Selecciona al menos un portal', 'error'); return; }
 
   const criterios = {
-    ciudad:           document.getElementById('ciudad').value,
+    ciudad:           document.getElementById('ciudad').value === 'otra'
+                        ? document.getElementById('ciudad-custom').value.toLowerCase().trim()
+                        : document.getElementById('ciudad').value,
     tipo:             document.getElementById('tipo').value,
     operacion:        document.getElementById('operacion').value,
     precio_min:       parseInt(document.getElementById('precio_min').value) || 0,
@@ -1053,7 +1068,9 @@ async function crearAlerta() {
 
   const portales = [...document.querySelectorAll('.portal-chip.active')].map(c => c.dataset.portal);
   const criterios = {
-    ciudad: document.getElementById('ciudad').value,
+    ciudad: document.getElementById('ciudad').value === 'otra'
+                  ? document.getElementById('ciudad-custom').value.toLowerCase().trim()
+                  : document.getElementById('ciudad').value,
     tipo: document.getElementById('tipo').value,
     operacion: document.getElementById('operacion').value,
     precio_min: parseInt(document.getElementById('precio_min').value) || 0,
@@ -1106,6 +1123,17 @@ function toast(msg, type = 'success') {
 // Portal chips toggle
 document.querySelectorAll('.portal-chip').forEach(chip => {
   chip.addEventListener('click', () => chip.classList.toggle('active'));
+});
+
+// Mostrar campo de texto cuando eligen "Otra ciudad"
+document.getElementById('ciudad').addEventListener('change', function() {
+  const custom = document.getElementById('ciudad-custom');
+  if (this.value === 'otra') {
+    custom.style.display = 'block';
+    custom.focus();
+  } else {
+    custom.style.display = 'none';
+  }
 });
 </script>
 </body>

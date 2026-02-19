@@ -591,6 +591,75 @@ def diagnostico():
     return resultado
 
 
+@app.get("/api/html-muestra/{portal}")
+def html_muestra(portal: str):
+    """
+    Descarga la pagina de busqueda de un portal y extrae el __NEXT_DATA__.
+    Util para depurar la estructura de datos real.
+    """
+    urls = {
+        "fincaraiz":     "https://www.fincaraiz.com.co/apartamento/venta/bogota-dc/",
+        "ciencuadras":   "https://www.ciencuadras.com/venta/apartamento/bogota",
+        "metrocuadrado": "https://www.metrocuadrado.com/apartamento/venta/bogota/",
+    }
+    url = urls.get(portal)
+    if not url:
+        return {"error": "portal no valido"}
+    try:
+        resp = scraper_get(url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Extraer __NEXT_DATA__
+        script = soup.find("script", id="__NEXT_DATA__")
+        if script and script.string:
+            data      = json.loads(script.string)
+            pp        = data.get("props", {}).get("pageProps", {})
+            # Mostrar solo las claves disponibles y una muestra del primer item
+            claves    = list(pp.keys())
+            primer    = None
+            for k in ["listings", "inmuebles", "results", "data"]:
+                items = pp.get(k)
+                if isinstance(items, list) and items:
+                    primer = items[0]
+                    break
+                if isinstance(items, dict):
+                    for subk in ["listings", "inmuebles", "results"]:
+                        subitems = items.get(subk)
+                        if isinstance(subitems, list) and subitems:
+                            primer = subitems[0]
+                            break
+            return {
+                "portal": portal,
+                "size_kb": round(len(resp.text) / 1024),
+                "tiene_next_data": True,
+                "pageProps_keys": claves,
+                "primer_item": primer,
+            }
+        else:
+            # Sin __NEXT_DATA__: mostrar primeras clases CSS encontradas
+            clases = list(set(
+                cls for tag in soup.find_all(True)
+                for cls in (tag.get("class") or [])
+                if len(cls) > 3
+            ))[:40]
+            # Buscar scripts con JSON
+            scripts_con_data = []
+            for scr in soup.find_all("script"):
+                src = scr.string or ""
+                if len(src) > 200 and ("precio" in src or "price" in src or "salePrice" in src):
+                    scripts_con_data.append(src[:500])
+            return {
+                "portal": portal,
+                "size_kb": round(len(resp.text) / 1024),
+                "tiene_next_data": False,
+                "clases_css": clases,
+                "scripts_con_precio": scripts_con_data[:2],
+                "html_inicio": resp.text[:1000],
+            }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/buscar")
 def buscar(criterios: CriteriosBusqueda):
     import traceback

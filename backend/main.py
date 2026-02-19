@@ -252,8 +252,8 @@ def scrape_metrocuadrado(criterios: CriteriosBusqueda, max_items=10):
 
 def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
     """
-    Finca Raiz usa Apollo/GraphQL. Los datos estan en pageProps.apolloState.
-    Clave del cache: ROOT_QUERY > search(...) > listings > [items]
+    Finca Raiz: los datos estan en fetchResult.searchFast.data (lista de inmuebles).
+    fetchResult.property contiene el inmueble destacado individual.
     """
     resultados = []
     ciudad_map = {
@@ -277,52 +277,29 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
             print("[FincaRaiz] Sin __NEXT_DATA__")
             return resultados
 
-        data      = json.loads(script.string)
-        pp        = data.get("props", {}).get("pageProps", {})
+        data  = json.loads(script.string)
+        pp    = data.get("props", {}).get("pageProps", {})
+        fetch = pp.get("fetchResult", {})
 
-        # Intentar fetchResult primero (estructura mas comun)
-        fetch = pp.get("fetchResult") or {}
-        if isinstance(fetch, dict):
-            for v in fetch.values():
-                if isinstance(v, dict) and "listings" in v:
-                    items = v["listings"]
-                    print(f"[FincaRaiz fetchResult] {len(items)} items")
-                    for item in items[:max_items]:
-                        try: resultados.append(_fr_item(item, criterios.ciudad))
-                        except: continue
-                    break
+        # Fuente principal: fetchResult.searchFast.data
+        search_fast = fetch.get("searchFast", {})
+        items = search_fast.get("data") or []
+        if isinstance(items, dict):
+            # a veces data es {listings: [...]}
+            items = items.get("listings") or items.get("results") or list(items.values())
+            if items and isinstance(items[0], dict) and "data" in items[0]:
+                items = items[0]["data"]
+        print(f"[FincaRaiz searchFast.data] {len(items)} items")
+        for item in items[:max_items]:
+            try: resultados.append(_fr_item(item, criterios.ciudad))
+            except: continue
 
-        # Intentar apolloState (cache GraphQL)
+        # Fuente secundaria: fetchResult.property (inmueble destacado)
         if not resultados:
-            apollo = pp.get("apolloState") or {}
-            # Buscar listas de inmuebles en el cache Apollo
-            listados = []
-            for key, val in apollo.items():
-                if isinstance(val, dict):
-                    # Buscar referencias de tipo Listing
-                    if val.get("__typename") in ("Listing", "Inmueble", "Property"):
-                        listados.append(val)
-                    # Buscar arrays de referencias
-                    for subkey, subval in val.items():
-                        if isinstance(subval, list) and len(subval) > 2:
-                            for ref in subval:
-                                if isinstance(ref, dict) and "__ref" in ref:
-                                    ref_data = apollo.get(ref["__ref"], {})
-                                    if ref_data.get("__typename") in ("Listing", "Inmueble", "Property", "RealEstate"):
-                                        listados.append(ref_data)
-            print(f"[FincaRaiz apolloState] {len(listados)} listados encontrados")
-            for item in listados[:max_items]:
-                try: resultados.append(_fr_item(item, criterios.ciudad))
-                except: continue
-
-        # Intentar FiltersContextInitialState
-        if not resultados:
-            filters_ctx = pp.get("FiltersContextInitialState") or {}
-            items = filters_ctx.get("listings") or filters_ctx.get("results") or []
-            print(f"[FincaRaiz FiltersContext] {len(items)} items")
-            for item in items[:max_items]:
-                try: resultados.append(_fr_item(item, criterios.ciudad))
-                except: continue
+            prop = fetch.get("property")
+            if isinstance(prop, dict) and prop.get("id"):
+                try: resultados.append(_fr_item(prop, criterios.ciudad))
+                except: pass
 
     except Exception as e:
         print(f"[FincaRaiz] Error: {e}")
@@ -732,14 +709,29 @@ def html_muestra(portal: str):
             filters = pp.get("FiltersContextInitialState") or {}
             filters_keys = list(filters.keys())[:15] if isinstance(filters, dict) else []
 
+            # Extraer primer item de searchFast.data
+            search_fast = (pp.get("fetchResult") or {}).get("searchFast", {})
+            sf_data = search_fast.get("data") or []
+            primer_sf = None
+            if isinstance(sf_data, list) and sf_data:
+                primer_sf = sf_data[0]
+            elif isinstance(sf_data, dict):
+                for v in sf_data.values():
+                    if isinstance(v, list) and v:
+                        primer_sf = v[0]
+                        break
+
             return {
                 "portal": portal,
                 "size_kb": round(len(resp.text) / 1024),
                 "pageProps_keys": claves,
+                "searchFast_keys": list(search_fast.keys()) if isinstance(search_fast, dict) else str(type(search_fast)),
+                "searchFast_data_type": str(type(sf_data)),
+                "searchFast_data_len": len(sf_data) if isinstance(sf_data, (list,dict)) else 0,
+                "primer_item_searchFast": primer_sf,
                 "fetchResult_keys": fetch_keys,
                 "fetchResult_muestra": fetch_muestra,
                 "apolloState_types": apollo_types,
-                "apolloState_primer_listing": primer_listing,
                 "filtersContext_keys": filters_keys,
             }
         else:

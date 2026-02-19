@@ -593,36 +593,67 @@ def diagnostico():
 
 @app.post("/api/buscar")
 def buscar(criterios: CriteriosBusqueda):
-    todos      = []
-    por_portal = max(8, criterios.max_resultados // max(len(criterios.portales), 1))
+    import traceback
+    try:
+        todos      = []
+        por_portal = max(8, criterios.max_resultados // max(len(criterios.portales), 1))
+        errores    = []
 
-    if "metrocuadrado" in criterios.portales:
-        todos.extend(scrape_metrocuadrado(criterios, por_portal))
-        time.sleep(1)
-    if "fincaraiz" in criterios.portales:
-        todos.extend(scrape_fincaraiz(criterios, por_portal))
-        time.sleep(1)
-    if "ciencuadras" in criterios.portales:
-        todos.extend(scrape_ciencuadras(criterios, por_portal))
+        if "metrocuadrado" in criterios.portales:
+            try:
+                todos.extend(scrape_metrocuadrado(criterios, por_portal))
+            except Exception as e:
+                errores.append(f"Metrocuadrado: {e}")
+                print(f"[buscar] Metrocuadrado fallo: {e}")
 
-    filtrados = aplicar_filtros(todos, criterios)
+        if "fincaraiz" in criterios.portales:
+            try:
+                todos.extend(scrape_fincaraiz(criterios, por_portal))
+            except Exception as e:
+                errores.append(f"Finca Raiz: {e}")
+                print(f"[buscar] FincaRaiz fallo: {e}")
 
-    if not filtrados:
-        return {"resultados": [], "total": 0,
-                "consejo_general": "No se encontraron propiedades. Intenta ampliar el rango de precio o área."}
+        if "ciencuadras" in criterios.portales:
+            try:
+                todos.extend(scrape_ciencuadras(criterios, por_portal))
+            except Exception as e:
+                errores.append(f"Ciencuadras: {e}")
+                print(f"[buscar] Ciencuadras fallo: {e}")
 
-    filtrados = analizar_con_ia(filtrados, criterios)
+        print(f"[buscar] Total bruto: {len(todos)} | Errores: {errores}")
+        filtrados = aplicar_filtros(todos, criterios)
+        print(f"[buscar] Tras filtros: {len(filtrados)}")
 
-    consejo = ""
-    props   = []
-    for p in filtrados:
-        if p.get("_meta"):
-            consejo = p.get("consejo_general", "")
-        else:
-            props.append(p)
+        if not filtrados:
+            msg = "No se encontraron propiedades."
+            if errores:
+                msg += f" Errores: {', '.join(errores)}"
+            else:
+                msg += " Intenta ampliar el rango de precio o area."
+            return {"resultados": [], "total": 0, "consejo_general": msg}
 
-    props.sort(key=lambda x: x.get("score_ia") or 0, reverse=True)
-    return {"resultados": props, "total": len(props), "consejo_general": consejo}
+        try:
+            filtrados = analizar_con_ia(filtrados, criterios)
+        except Exception as e:
+            print(f"[buscar] IA fallo: {e}")
+            for p in filtrados:
+                p.update({"score_ia": None, "analisis_ia": "", "en_top3": "", "razon_top3": ""})
+
+        consejo = ""
+        props   = []
+        for p in filtrados:
+            if p.get("_meta"):
+                consejo = p.get("consejo_general", "")
+            else:
+                props.append(p)
+
+        props.sort(key=lambda x: x.get("score_ia") or 0, reverse=True)
+        return {"resultados": props, "total": len(props), "consejo_general": consejo}
+
+    except Exception as e:
+        print(f"[buscar] Error fatal: {e}")
+        traceback.print_exc()
+        return {"resultados": [], "total": 0, "consejo_general": f"Error interno: {str(e)}"}
 
 
 @app.post("/api/favoritos")

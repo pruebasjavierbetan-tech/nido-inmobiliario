@@ -207,34 +207,75 @@ def _normalizar_item(portal, item, ciudad, base_url):
 
 
 def scrape_metrocuadrado(criterios: CriteriosBusqueda, max_items=10):
+    """
+    Metrocuadrado tiene API REST con x-api-key.
+    ScraperAPI la pasa correctamente si incluimos headers customizados.
+    Ciudad: acepta cualquier string, no solo las principales.
+    """
     resultados = []
     tipo_map = {"apartamento": "Apartamento", "casa": "Casa", "oficina": "Oficina", "lote": "Lote"}
-    params = {
-        "realEstateTypeList":     tipo_map.get(criterios.tipo, "Apartamento"),
-        "realEstateBusinessList": "Venta" if criterios.operacion == "venta" else "Arriendo",
-        "city": criterios.ciudad.capitalize(),
-        "from": 0, "size": max_items,
-    }
-    if criterios.precio_min:       params["minimumPrice"]    = criterios.precio_min
-    if criterios.precio_max:       params["maximumPrice"]    = criterios.precio_max
-    if criterios.area_min:         params["minimumArea"]     = criterios.area_min
-    if criterios.habitaciones_min: params["minimumBedrooms"] = criterios.habitaciones_min
+
+    # Normalizar ciudad: "bogotá" -> "Bogota", "santa marta" -> "Santa Marta"
+    ciudad_norm = " ".join(w.capitalize() for w in criterios.ciudad.strip().split())
+
+    qs_parts = [
+        f"realEstateTypeList={tipo_map.get(criterios.tipo, 'Apartamento')}",
+        f"realEstateBusinessList={'Venta' if criterios.operacion == 'venta' else 'Arriendo'}",
+        f"city={ciudad_norm}",
+        "from=0",
+        f"size={max_items}",
+    ]
+    if criterios.precio_min:       qs_parts.append(f"minimumPrice={criterios.precio_min}")
+    if criterios.precio_max:       qs_parts.append(f"maximumPrice={criterios.precio_max}")
+    if criterios.area_min:         qs_parts.append(f"minimumArea={criterios.area_min}")
+    if criterios.habitaciones_min: qs_parts.append(f"minimumBedrooms={criterios.habitaciones_min}")
+
+    api_url = "https://www.metrocuadrado.com/rest-search/search?" + "&".join(qs_parts)
+
     try:
-        resp = scraper_get("https://www.metrocuadrado.com/rest-search/search", params)
-        print(f"[Metrocuadrado] status={resp.status_code} size={len(resp.text)}")
+        # Usar ScraperAPI con headers customizados para pasar la x-api-key
+        if SCRAPER_API_KEY:
+            resp = requests.get(
+                "https://api.scraperapi.com",
+                params={
+                    "api_key":      SCRAPER_API_KEY,
+                    "url":          api_url,
+                    "country_code": "co",
+                    "keep_headers": "true",
+                },
+                headers={
+                    "x-api-key": "P1MfFHfQMOtL16Zpg36NmT6uh",
+                    "Accept":    "application/json",
+                    "Referer":   "https://www.metrocuadrado.com/",
+                },
+                timeout=60,
+            )
+        else:
+            resp = requests.get(api_url, headers={
+                "x-api-key": "P1MfFHfQMOtL16Zpg36NmT6uh",
+                "Accept":    "application/json",
+            }, timeout=20)
+
+        print(f"[Metrocuadrado] status={resp.status_code} size={len(resp.text)} empieza={resp.text[:80]!r}")
+
         if resp.status_code == 200 and resp.text.strip().startswith("{"):
-            items = resp.json().get("results", [])
+            data  = resp.json()
+            items = data.get("results", data.get("data", []))
             print(f"[Metrocuadrado] {len(items)} items")
             for item in items:
                 try:
                     precio = item.get("salePrice") or item.get("rentPrice")
                     area   = item.get("area") or item.get("builtArea")
-                    link   = item.get("link", "")
+                    link   = item.get("link") or item.get("url") or ""
                     if link and not link.startswith("http"):
                         link = "https://www.metrocuadrado.com" + link
-                    resultados.append(prop_base(
+                    img = None
+                    imgs = item.get("images") or item.get("photos") or []
+                    if imgs and isinstance(imgs, list):
+                        img = imgs[0].get("image") or imgs[0].get("url") if isinstance(imgs[0], dict) else imgs[0]
+                    resultado = prop_base(
                         "Metrocuadrado",
-                        f"{item.get('propertyType','')} en {item.get('neighborhood') or item.get('city','')}",
+                        item.get("propertyType","Propiedad") + " en " + (item.get("neighborhood") or item.get("city") or ciudad_norm),
                         item.get("neighborhood") or item.get("location"),
                         item.get("city", criterios.ciudad),
                         precio, area,
@@ -242,10 +283,15 @@ def scrape_metrocuadrado(criterios: CriteriosBusqueda, max_items=10):
                         item.get("garages"), item.get("stratum"),
                         item.get("comment", ""),
                         link,
-                    ))
+                    )
+                    resultado["imagen"] = img
+                    resultados.append(resultado)
                 except: continue
+        else:
+            print(f"[Metrocuadrado] Respuesta no es JSON, primeros 200 chars: {resp.text[:200]}")
     except Exception as e:
         print(f"[Metrocuadrado] Error: {e}")
+        import traceback; traceback.print_exc()
     print(f"[Metrocuadrado] Total: {len(resultados)}")
     return resultados
 
@@ -259,9 +305,19 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
     ciudad_map = {
         "bogota": "bogota-dc", "medellin": "antioquia/medellin",
         "cali": "valle-del-cauca/cali", "barranquilla": "atlantico/barranquilla",
-        "cartagena": "bolivar/cartagena",
+        "cartagena": "bolivar/cartagena", "bucaramanga": "santander/bucaramanga",
+        "pereira": "risaralda/pereira", "manizales": "caldas/manizales",
+        "cucuta": "norte-de-santander/cucuta", "ibague": "tolima/ibague",
+        "santa marta": "magdalena/santa-marta", "villavicencio": "meta/villavicencio",
+        "pasto": "narino/pasto", "monteria": "cordoba/monteria",
+        "armenia": "quindio/armenia", "neiva": "huila/neiva",
     }
-    ciudad_url = ciudad_map.get(criterios.ciudad, criterios.ciudad)
+    # Para ciudades no mapeadas: convertir a slug (minúsculas, espacios -> guiones, sin tildes)
+    import unicodedata
+    def to_slug(s):
+        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+        return s.lower().strip().replace(" ", "-")
+    ciudad_url = ciudad_map.get(criterios.ciudad.lower(), to_slug(criterios.ciudad))
     url = f"https://www.fincaraiz.com.co/{criterios.tipo}/{criterios.operacion}/{ciudad_url}/"
     params = {}
     if criterios.precio_min:       params["precio-desde"] = criterios.precio_min
@@ -410,70 +466,68 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
         resp = scraper_get(url, params)
         print(f"[Ciencuadras] status={resp.status_code} size={len(resp.text)}")
 
-        # Metodo 1: JSON Schema (structured data) en <script type="application/ld+json">
         soup = BeautifulSoup(resp.text, "html.parser")
-        for script in soup.find_all("script", {"type": "application/ld+json"}):
+        html_dec = resp.text.replace("&q;", '"').replace("&amp;q;", '"')
+
+        # Metodo 1 (PRIORITARIO): JSON con &q; — tiene precio, area, imagen, bedrooms, link completo
+        m = re.search(r'"highlights"\s*:\s*(\[.+?\])\s*,\s*"[a-zA-Z]', html_dec, re.DOTALL)
+        if m:
             try:
-                data  = json.loads(script.string or "")
-                items = data.get("itemListElement", [])
-                if items:
+                items = json.loads(m.group(1))
+                print(f"[Ciencuadras &q; highlights] {len(items)} items")
+                for item in items[:max_items]:
+                    try:
+                        link = item.get("url") or ""
+                        if link and not link.startswith("http"):
+                            link = "https://www.ciencuadras.com" + link
+                        # precio puede venir como int (280000000) o string
+                        precio_raw = item.get("price") or item.get("precio") or 0
+                        precio = int(precio_raw) if str(precio_raw).isdigit() else limpiar_precio(str(precio_raw))
+                        area   = limpiar_area(str(item.get("area") or item.get("builtArea") or ""))
+                        barrio = item.get("neighborhood") or item.get("sector") or item.get("locality") or ""
+                        ciudad_item = item.get("city") or criterios.ciudad
+                        titulo = f"{item.get('realEstateType') or 'Propiedad'} en {barrio or ciudad_item}"
+                        resultado = prop_base(
+                            "Ciencuadras", titulo, barrio, ciudad_item,
+                            precio, area,
+                            item.get("bedrooms"), item.get("bathrooms"),
+                            item.get("garages") or item.get("parkingLots"),
+                            item.get("stratum"),
+                            item.get("description") or "",
+                            link,
+                        )
+                        resultado["imagen"] = item.get("image")
+                        resultados.append(resultado)
+                    except Exception as e2:
+                        print(f"[Ciencuadras item error] {e2}")
+                        continue
+            except Exception as e:
+                print(f"[Ciencuadras &q;] Error: {e}")
+
+        # Metodo 2 (FALLBACK): ld+json — solo tiene nombre, url y precio
+        if not resultados:
+            for script in soup.find_all("script", {"type": "application/ld+json"}):
+                try:
+                    data  = json.loads(script.string or "")
+                    items = data.get("itemListElement", [])
+                    if not items: continue
                     print(f"[Ciencuadras ld+json] {len(items)} items")
                     for el in items[:max_items]:
-                        item = el.get("item", el)
-                        try:
-                            offers = item.get("offers") or {}
-                            precio = limpiar_precio(str(offers.get("price") or ""))
-                            link   = item.get("url") or el.get("url") or ""
-                            resultados.append(prop_base(
-                                "Ciencuadras",
-                                item.get("name") or "Propiedad",
-                                None, criterios.ciudad,
-                                precio, None,
-                                None, None, None, None,
-                                item.get("description") or "",
-                                link,
-                            ))
-                        except: continue
+                        item   = el.get("item", el)
+                        offers = item.get("offers") or {}
+                        precio_raw = offers.get("price") or 0
+                        precio = int(precio_raw) if isinstance(precio_raw, (int,float)) else limpiar_precio(str(precio_raw))
+                        link   = item.get("url") or el.get("url") or ""
+                        resultado = prop_base(
+                            "Ciencuadras",
+                            item.get("name") or "Propiedad",
+                            None, criterios.ciudad, precio, None,
+                            None, None, None, None,
+                            item.get("description") or "", link,
+                        )
+                        resultados.append(resultado)
                     break
-            except: continue
-
-        # Metodo 2: JSON embebido con &q; (comillas HTML-escaped)
-        # Estructura real: highlights[].{url, realEstateType, offerType, image,
-        #                               price, area, bedrooms, bathrooms, stratum, neighborhood}
-        if not resultados:
-            html = resp.text
-            html_dec = html.replace("&q;", '"').replace("&amp;q;", '"')
-            # Buscar highlights dentro de data
-            m = re.search(r'"highlights"\s*:\s*(\[.+?\])\s*,\s*"[a-z]', html_dec, re.DOTALL)
-            if m:
-                try:
-                    items = json.loads(m.group(1))
-                    print(f"[Ciencuadras &q; highlights] {len(items)} items")
-                    for item in items[:max_items]:
-                        try:
-                            link = item.get("url") or ""
-                            if link and not link.startswith("http"):
-                                link = "https://www.ciencuadras.com" + link
-                            precio = limpiar_precio(str(item.get("price") or ""))
-                            area   = limpiar_area(str(item.get("area") or item.get("builtArea") or ""))
-                            resultado = prop_base(
-                                "Ciencuadras",
-                                f"{item.get('realEstateType','Propiedad')} en {item.get('offerType','venta')}",
-                                item.get("neighborhood") or item.get("sector") or item.get("city"),
-                                item.get("city") or criterios.ciudad,
-                                precio, area,
-                                item.get("bedrooms"),
-                                item.get("bathrooms"),
-                                item.get("garages") or item.get("parkingLots"),
-                                item.get("stratum"),
-                                item.get("description") or "",
-                                link,
-                            )
-                            resultado["imagen"] = item.get("image")
-                            resultados.append(resultado)
-                        except: continue
-                except Exception as e:
-                    print(f"[Ciencuadras &q;] Error parseando: {e}")
+                except: continue
 
         # Metodo 3: buscar URLs directas de inmuebles en el HTML
         if not resultados:

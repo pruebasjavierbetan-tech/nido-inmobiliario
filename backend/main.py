@@ -689,25 +689,32 @@ def scrape_facebook(criterios: CriteriosBusqueda, max_items=10):
 
 def aplicar_filtros(resultados, criterios: CriteriosBusqueda):
     filtrados = []
+    descartados = 0
     for p in resultados:
         precio = p.get("precio")
         area   = p.get("area")
-        # Solo filtrar por precio si el inmueble TIENE precio conocido
+        # Filtrar por precio solo si el inmueble tiene precio conocido
+        # Margen del 15% para no descartar inmuebles cercanos al límite
         if precio and precio > 0:
-            if criterios.precio_min and precio < criterios.precio_min: continue
-            if criterios.precio_max and precio > criterios.precio_max: continue
-        # Solo filtrar por área si el inmueble TIENE área conocida
+            if criterios.precio_min and precio < criterios.precio_min * 0.85:
+                descartados += 1; continue
+            if criterios.precio_max and criterios.precio_max > 0 and precio > criterios.precio_max * 1.15:
+                descartados += 1; continue
+        # Filtrar por área solo si el inmueble tiene área conocida
         if area and area > 0:
-            if criterios.area_min and area < criterios.area_min: continue
-            if criterios.area_max and criterios.area_max > 0 and area > criterios.area_max: continue
+            if criterios.area_min and area < criterios.area_min * 0.85:
+                descartados += 1; continue
+            if criterios.area_max and criterios.area_max > 0 and area > criterios.area_max * 1.15:
+                descartados += 1; continue
         if criterios.parqueadero and not p.get("parqueadero"):
-            continue
+            descartados += 1; continue
         estrato = p.get("estrato")
         if estrato and str(estrato).strip().isdigit():
             e = int(str(estrato).strip())
-            if criterios.estrato_min and e < criterios.estrato_min: continue
-            if criterios.estrato_max and e > criterios.estrato_max: continue
+            if criterios.estrato_min and e < criterios.estrato_min: descartados += 1; continue
+            if criterios.estrato_max and e > criterios.estrato_max: descartados += 1; continue
         filtrados.append(p)
+    print(f"[filtros] {len(resultados)} brutos → {len(filtrados)} pasan ({descartados} descartados)")
     return filtrados
 
 

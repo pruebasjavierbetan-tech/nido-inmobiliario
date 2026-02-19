@@ -309,41 +309,83 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
 
 
 def _fr_item(item, ciudad):
-    """Normaliza un item de Finca Raiz al formato estandar."""
+    """
+    Normaliza un item de Finca Raiz.
+    Estructura real: price.amount, m2Built, bedrooms, bathrooms,
+    stratum, locations.locality[0].name, link, images[0].image
+    """
+    # Precio: price es un dict con amount
     precio = None
-    for k in ["canonicalPrice", "price", "precio", "salePrice", "rentPrice", "priceFormatted"]:
-        v = item.get(k)
-        if v:
-            precio = limpiar_precio(str(v))
-            if precio: break
+    price_obj = item.get("price")
+    if isinstance(price_obj, dict):
+        precio = limpiar_precio(str(price_obj.get("amount") or price_obj.get("admin_included") or ""))
+    if not precio:
+        for k in ["price_amount_usd", "canonicalPrice", "salePrice", "rentPrice"]:
+            v = item.get(k)
+            if v:
+                precio = limpiar_precio(str(v))
+                if precio: break
 
+    # Area: m2Built es el campo principal
     area = None
-    for k in ["area", "builtArea", "areaConstruida", "totalArea"]:
+    for k in ["m2Built", "m2", "m2apto", "m2Terrain"]:
         v = item.get(k)
         if v:
-            area = limpiar_area(str(v))
-            if area: break
+            try:
+                area = float(str(v).replace(",", "."))
+                if area: break
+            except: continue
+    if not area:
+        # Buscar en technicalSheet
+        for ts in item.get("technicalSheet", []):
+            if ts.get("field") in ("m2Built", "area") and ts.get("value"):
+                area = limpiar_area(ts["value"])
+                if area: break
 
-    link = str(item.get("link") or item.get("url") or item.get("href") or item.get("slug") or "")
+    # Barrio: locations.locality[0].name
+    barrio = None
+    locs = item.get("locations") or {}
+    locality = locs.get("locality") or []
+    if locality and isinstance(locality, list):
+        barrio = locality[0].get("name")
+    if not barrio:
+        zone = locs.get("zone") or []
+        if zone and isinstance(zone, list):
+            barrio = zone[0].get("name")
+    if not barrio:
+        barrio = item.get("address") or "Ver enlace"
+
+    # Link: relativo, agregar dominio
+    link = str(item.get("link") or "")
     if link and not link.startswith("http"):
         link = "https://www.fincaraiz.com.co" + link
 
-    titulo = (item.get("title") or item.get("titulo") or item.get("name") or
-              item.get("propertyType") or item.get("tipoInmueble") or "Propiedad")
+    # Habitaciones y banos: buscar en technicalSheet si no en item
+    habitaciones = item.get("bedrooms")
+    banos        = item.get("bathrooms")
+    garajes      = item.get("garage") or item.get("garages")
+    for ts in item.get("technicalSheet", []):
+        field = ts.get("field", "")
+        val   = ts.get("value")
+        if field == "bedrooms"  and not habitaciones: habitaciones = val
+        if field == "bathrooms" and not banos:        banos = val
+        if field == "garage"    and not garajes:      garajes = val
 
-    barrio = (item.get("neighborhood") or item.get("barrio") or item.get("location") or
-              item.get("sector") or item.get("zone") or "Ver enlace")
+    # Imagen principal
+    imagenes = item.get("images") or []
+    img = imagenes[0].get("image") if imagenes else None
 
-    return prop_base(
+    resultado = prop_base(
         "Finca Raiz",
-        titulo, barrio, ciudad, precio, area,
-        item.get("bedrooms") or item.get("habitaciones") or item.get("rooms"),
-        item.get("bathrooms") or item.get("banos"),
-        item.get("garages") or item.get("garajes") or item.get("parking"),
-        item.get("stratum") or item.get("estrato"),
-        item.get("description") or item.get("descripcion") or item.get("comment") or "",
+        item.get("title") or item.get("name") or "Propiedad",
+        barrio, ciudad, precio, area,
+        habitaciones, banos, garajes,
+        item.get("stratum"),
+        item.get("description") or "",
         link,
     )
+    resultado["imagen"] = img
+    return resultado
 
 
 def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
@@ -396,35 +438,39 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
             except: continue
 
         # Metodo 2: JSON embebido con &q; (comillas HTML-escaped)
+        # Estructura real: highlights[].{url, realEstateType, offerType, image,
+        #                               price, area, bedrooms, bathrooms, stratum, neighborhood}
         if not resultados:
             html = resp.text
-            # Decodificar &q; -> "
             html_dec = html.replace("&q;", '"').replace("&amp;q;", '"')
-            # Buscar el bloque results con highlights
-            m = re.search(r'"results-[^"]+"\s*:\s*\{[^{]*"data"\s*:\s*\{[^{]*"highlights"\s*:\s*(\[.+?\])\s*,', html_dec, re.DOTALL)
+            # Buscar highlights dentro de data
+            m = re.search(r'"highlights"\s*:\s*(\[.+?\])\s*,\s*"[a-z]', html_dec, re.DOTALL)
             if m:
                 try:
                     items = json.loads(m.group(1))
-                    print(f"[Ciencuadras &q; JSON] {len(items)} items")
+                    print(f"[Ciencuadras &q; highlights] {len(items)} items")
                     for item in items[:max_items]:
                         try:
-                            link = item.get("url") or item.get("link") or ""
+                            link = item.get("url") or ""
                             if link and not link.startswith("http"):
                                 link = "https://www.ciencuadras.com" + link
-                            resultados.append(prop_base(
+                            precio = limpiar_precio(str(item.get("price") or ""))
+                            area   = limpiar_area(str(item.get("area") or item.get("builtArea") or ""))
+                            resultado = prop_base(
                                 "Ciencuadras",
-                                item.get("realEstateType") or item.get("name") or "Propiedad",
-                                item.get("neighborhood") or item.get("sector"),
-                                item.get("city", criterios.ciudad),
-                                limpiar_precio(str(item.get("price") or item.get("precio") or "")),
-                                limpiar_area(str(item.get("area") or item.get("builtArea") or "")),
-                                item.get("bedrooms") or item.get("habitaciones"),
-                                item.get("bathrooms") or item.get("banos"),
+                                f"{item.get('realEstateType','Propiedad')} en {item.get('offerType','venta')}",
+                                item.get("neighborhood") or item.get("sector") or item.get("city"),
+                                item.get("city") or criterios.ciudad,
+                                precio, area,
+                                item.get("bedrooms"),
+                                item.get("bathrooms"),
                                 item.get("garages") or item.get("parkingLots"),
-                                item.get("stratum") or item.get("estrato"),
+                                item.get("stratum"),
                                 item.get("description") or "",
                                 link,
-                            ))
+                            )
+                            resultado["imagen"] = item.get("image")
+                            resultados.append(resultado)
                         except: continue
                 except Exception as e:
                     print(f"[Ciencuadras &q;] Error parseando: {e}")

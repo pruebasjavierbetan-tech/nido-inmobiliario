@@ -233,7 +233,7 @@ def scrape_metrocuadrado(criterios: CriteriosBusqueda, max_items=10):
     api_url = "https://www.metrocuadrado.com/rest-search/search?" + "&".join(qs_parts)
 
     try:
-        # Usar ScraperAPI con headers customizados para pasar la x-api-key
+        # Metrocuadrado está protegido con Cloudflare → requiere premium=true en ScraperAPI
         if SCRAPER_API_KEY:
             resp = requests.get(
                 "https://api.scraperapi.com",
@@ -241,6 +241,7 @@ def scrape_metrocuadrado(criterios: CriteriosBusqueda, max_items=10):
                     "api_key":      SCRAPER_API_KEY,
                     "url":          api_url,
                     "country_code": "co",
+                    "premium":      "true",
                     "keep_headers": "true",
                 },
                 headers={
@@ -248,7 +249,7 @@ def scrape_metrocuadrado(criterios: CriteriosBusqueda, max_items=10):
                     "Accept":    "application/json",
                     "Referer":   "https://www.metrocuadrado.com/",
                 },
-                timeout=60,
+                timeout=90,
             )
         else:
             resp = requests.get(api_url, headers={
@@ -556,6 +557,135 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
     return resultados
 
 
+def scrape_facebook(criterios: CriteriosBusqueda, max_items=10):
+    """
+    Facebook Marketplace: usa la API interna de GraphQL de FB.
+    No requiere login para búsquedas públicas de inmuebles.
+    Ciudad se pasa como texto libre.
+    """
+    resultados = []
+
+    # Mapa de ciudades colombianas a IDs de Facebook Marketplace
+    ciudad_fb_map = {
+        "bogota": "bogota", "medellin": "medellin", "cali": "cali",
+        "barranquilla": "barranquilla", "cartagena": "cartagena",
+        "bucaramanga": "bucaramanga", "pereira": "pereira",
+        "santa marta": "santa-marta", "manizales": "manizales",
+        "cucuta": "cucuta", "ibague": "ibague", "villavicencio": "villavicencio",
+        "pasto": "pasto", "armenia": "armenia", "neiva": "neiva",
+    }
+    ciudad_slug = ciudad_fb_map.get(criterios.ciudad.lower(), criterios.ciudad.lower().replace(" ", "-"))
+
+    # Tipo de inmueble para FB
+    categoria_map = {
+        "apartamento": "propertyrentals", "casa": "propertyrentals",
+        "oficina": "propertyrentals", "lote": "propertyforsale",
+    }
+    categoria = "propertyforsale" if criterios.operacion == "venta" else "propertyrentals"
+
+    try:
+        # URL de búsqueda pública de FB Marketplace
+        url = f"https://www.facebook.com/marketplace/{ciudad_slug}/{categoria}/"
+        params = {}
+        if criterios.precio_min: params["minPrice"] = criterios.precio_min
+        if criterios.precio_max: params["maxPrice"] = criterios.precio_max
+
+        resp = scraper_get(url, params)
+        print(f"[Facebook] status={resp.status_code} size={len(resp.text)}")
+
+        if resp.status_code != 200:
+            print(f"[Facebook] No accesible: {resp.status_code}")
+            return resultados
+
+        # FB embebe datos en window.__BBQ_STATE__ o __RELAY_STORE__
+        html = resp.text
+
+        # Buscar JSON con listings de marketplace
+        patterns = [
+            r'"marketplace_search".*?"edges"\s*:\s*(\[.{100,}\])\s*[,}]',
+            r'"for_sale_items".*?"edges"\s*:\s*(\[.{100,}\])\s*[,}]',
+            r'"nodes"\s*:\s*(\[.{200,}\])',
+        ]
+        items_raw = []
+        for pat in patterns:
+            m = re.search(pat, html, re.DOTALL)
+            if m:
+                try:
+                    edges = json.loads(m.group(1))
+                    print(f"[Facebook] {len(edges)} edges encontrados")
+                    items_raw = edges
+                    break
+                except:
+                    continue
+
+        for edge in items_raw[:max_items]:
+            try:
+                node = edge.get("node", edge)
+                listing = node.get("listing", node)
+
+                precio_obj = listing.get("listing_price") or listing.get("price") or {}
+                precio = None
+                if isinstance(precio_obj, dict):
+                    precio = limpiar_precio(str(precio_obj.get("amount") or ""))
+                elif precio_obj:
+                    precio = limpiar_precio(str(precio_obj))
+
+                loc = listing.get("location") or listing.get("marketplace_listing_location") or {}
+                barrio = loc.get("reverse_geocode", {}).get("city") or loc.get("name") or criterios.ciudad
+
+                img = None
+                img_data = listing.get("primary_listing_photo") or listing.get("cover_photo") or {}
+                if isinstance(img_data, dict):
+                    img = img_data.get("image", {}).get("uri") or img_data.get("uri")
+
+                listing_id = listing.get("id") or node.get("id") or ""
+                link = f"https://www.facebook.com/marketplace/item/{listing_id}/" if listing_id else url
+
+                attrs = listing.get("attribute_data") or {}
+                area        = limpiar_area(str(attrs.get("property_area") or attrs.get("square_footage") or ""))
+                habitaciones= attrs.get("num_bedrooms") or attrs.get("bedrooms")
+                banos       = attrs.get("num_bathrooms") or attrs.get("bathrooms")
+
+                resultado = prop_base(
+                    "Facebook",
+                    listing.get("marketplace_listing_title") or listing.get("name") or "Propiedad",
+                    barrio, criterios.ciudad,
+                    precio, area,
+                    habitaciones, banos,
+                    None, None,
+                    listing.get("description") or listing.get("redacted_description", {}).get("text") or "",
+                    link,
+                )
+                resultado["imagen"] = img
+                resultados.append(resultado)
+            except:
+                continue
+
+        # Si no encontramos JSON estructurado, al menos extraer links de inmuebles
+        if not resultados:
+            soup = BeautifulSoup(html, "html.parser")
+            links_fb = set()
+            for a in soup.find_all("a", href=True):
+                if "/marketplace/item/" in a["href"]:
+                    full = "https://www.facebook.com" + a["href"] if a["href"].startswith("/") else a["href"]
+                    links_fb.add(full.split("?")[0])
+            print(f"[Facebook links] {len(links_fb)} items encontrados")
+            for link in list(links_fb)[:max_items]:
+                resultados.append(prop_base(
+                    "Facebook", "Propiedad en Facebook Marketplace",
+                    None, criterios.ciudad,
+                    None, None, None, None, None, None, "",
+                    link,
+                ))
+
+    except Exception as e:
+        print(f"[Facebook] Error: {e}")
+        import traceback; traceback.print_exc()
+
+    print(f"[Facebook] Total: {len(resultados)}")
+    return resultados
+
+
 # ── Filtros ────────────────────────────────────────────────────────────────────
 
 def aplicar_filtros(resultados, criterios: CriteriosBusqueda):
@@ -563,18 +693,21 @@ def aplicar_filtros(resultados, criterios: CriteriosBusqueda):
     for p in resultados:
         precio = p.get("precio")
         area   = p.get("area")
-        if precio:
+        # Solo filtrar por precio si el inmueble TIENE precio conocido
+        if precio and precio > 0:
             if criterios.precio_min and precio < criterios.precio_min: continue
             if criterios.precio_max and precio > criterios.precio_max: continue
-        if area:
+        # Solo filtrar por área si el inmueble TIENE área conocida
+        if area and area > 0:
             if criterios.area_min and area < criterios.area_min: continue
             if criterios.area_max and criterios.area_max > 0 and area > criterios.area_max: continue
         if criterios.parqueadero and not p.get("parqueadero"):
             continue
         estrato = p.get("estrato")
-        if estrato and str(estrato).isdigit():
-            if criterios.estrato_min and int(estrato) < criterios.estrato_min: continue
-            if criterios.estrato_max and int(estrato) > criterios.estrato_max: continue
+        if estrato and str(estrato).strip().isdigit():
+            e = int(str(estrato).strip())
+            if criterios.estrato_min and e < criterios.estrato_min: continue
+            if criterios.estrato_max and e > criterios.estrato_max: continue
         filtrados.append(p)
     return filtrados
 
@@ -589,7 +722,14 @@ def analizar_con_ia(propiedades, criterios: CriteriosBusqueda):
                       "en_top3": "", "razon_top3": ""})
         return propiedades
 
-    client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    # Crear cliente limpio sin proxies (ScraperAPI puede inyectar HTTP_PROXY)
+    import os as _os
+    _env_backup = {}
+    for _k in ["HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy"]:
+        if _k in _os.environ:
+            _env_backup[_k] = _os.environ.pop(_k)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    _os.environ.update(_env_backup)
     props_text = ""
     for i, p in enumerate(propiedades):
         props_text += (
@@ -887,6 +1027,13 @@ def buscar(criterios: CriteriosBusqueda):
             except Exception as e:
                 errores.append(f"Ciencuadras: {e}")
                 print(f"[buscar] Ciencuadras fallo: {e}")
+
+        if "facebook" in criterios.portales:
+            try:
+                todos.extend(scrape_facebook(criterios, por_portal))
+            except Exception as e:
+                errores.append(f"Facebook: {e}")
+                print(f"[buscar] Facebook fallo: {e}")
 
         print(f"[buscar] Total bruto: {len(todos)} | Errores: {errores}")
         filtrados = aplicar_filtros(todos, criterios)

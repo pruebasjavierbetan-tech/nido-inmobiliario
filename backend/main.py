@@ -498,6 +498,12 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
             try:
                 items = json.loads(m.group(1))
                 print(f"[Ciencuadras &q; highlights] {len(items)} items")
+                if items:
+                    # Mostrar claves y valores del primer item para diagnóstico
+                    first = items[0]
+                    precio_keys = {k:v for k,v in first.items() if any(x in k.lower() for x in ["price","precio","valor","cost","canon"])}
+                    print(f"[CC diagnóstico] claves precio: {precio_keys}")
+                    print(f"[CC diagnóstico] todas las claves: {list(first.keys())}")
                 for item in items[:max_items]:
                     try:
                         link = item.get("url") or ""

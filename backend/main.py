@@ -205,95 +205,153 @@ def _normalizar_item(portal, item, ciudad, base_url):
     )
 
 
-def scrape_metrocuadrado(criterios: CriteriosBusqueda, max_items=10):
+def scrape_habi(criterios: CriteriosBusqueda, max_items=10):
     """
-    Metrocuadrado tiene API REST con x-api-key.
-    ScraperAPI la pasa correctamente si incluimos headers customizados.
-    Ciudad: acepta cualquier string, no solo las principales.
+    Habi.co — proptech colombiana con API interna GraphQL accesible.
+    Endpoint: https://app.habi.co/api/properties/search
+    No usa Cloudflare fuerte, funciona sin premium en ScraperAPI.
+    Cobertura: Bogotá, Medellín, Cali, Barranquilla y municipios cercanos.
     """
     resultados = []
-    tipo_map = {"apartamento": "Apartamento", "casa": "Casa", "oficina": "Oficina", "lote": "Lote"}
 
-    # Normalizar ciudad: "bogotá" -> "Bogota", "santa marta" -> "Santa Marta"
-    ciudad_norm = " ".join(w.capitalize() for w in criterios.ciudad.strip().split())
+    ciudad_map = {
+        "bogota": "Bogotá", "medellin": "Medellín", "cali": "Cali",
+        "barranquilla": "Barranquilla", "pereira": "Pereira",
+        "soacha": "Soacha", "chia": "Chía", "cajica": "Cajicá",
+        "mosquera": "Mosquera", "funza": "Funza", "zipaquira": "Zipaquirá",
+        "envigado": "Envigado", "itagui": "Itagüí", "bello": "Bello",
+        "sabaneta": "Sabaneta", "rionegro": "Rionegro",
+        "yumbo": "Yumbo", "jamundi": "Jamundí",
+    }
+    ciudad_nombre = ciudad_map.get(criterios.ciudad.lower(),
+                    " ".join(w.capitalize() for w in criterios.ciudad.split()))
 
-    qs_parts = [
-        f"realEstateTypeList={tipo_map.get(criterios.tipo, 'Apartamento')}",
-        f"realEstateBusinessList={'Venta' if criterios.operacion == 'venta' else 'Arriendo'}",
-        f"city={ciudad_norm}",
-        "from=0",
-        f"size={max_items}",
-    ]
-    if criterios.precio_min:       qs_parts.append(f"minimumPrice={criterios.precio_min}")
-    if criterios.precio_max:       qs_parts.append(f"maximumPrice={criterios.precio_max}")
-    if criterios.area_min:         qs_parts.append(f"minimumArea={criterios.area_min}")
-    if criterios.habitaciones_min: qs_parts.append(f"minimumBedrooms={criterios.habitaciones_min}")
-
-    api_url = "https://www.metrocuadrado.com/rest-search/search?" + "&".join(qs_parts)
-
+    # Intento 1: API REST de Habi
     try:
-        # Metrocuadrado está protegido con Cloudflare → requiere premium=true en ScraperAPI
-        if SCRAPER_API_KEY:
-            resp = requests.get(
-                "https://api.scraperapi.com",
-                params={
-                    "api_key":      SCRAPER_API_KEY,
-                    "url":          api_url,
-                    "country_code": "co",
-                    "premium":      "true",
-                    "keep_headers": "true",
-                },
-                headers={
-                    "x-api-key": "P1MfFHfQMOtL16Zpg36NmT6uh",
-                    "Accept":    "application/json",
-                    "Referer":   "https://www.metrocuadrado.com/",
-                },
-                timeout=90,
-            )
-        else:
-            resp = requests.get(api_url, headers={
-                "x-api-key": "P1MfFHfQMOtL16Zpg36NmT6uh",
-                "Accept":    "application/json",
-            }, timeout=20)
+        payload = {
+            "city": ciudad_nombre,
+            "operation": "sell" if criterios.operacion == "venta" else "rent",
+            "property_type": criterios.tipo,
+            "page": 1,
+            "page_size": max_items,
+        }
+        if criterios.precio_min: payload["min_price"] = criterios.precio_min
+        if criterios.precio_max: payload["max_price"] = criterios.precio_max
+        if criterios.area_min:   payload["min_area"]  = criterios.area_min
+        if criterios.habitaciones_min: payload["min_bedrooms"] = criterios.habitaciones_min
 
-        print(f"[Metrocuadrado] status={resp.status_code} size={len(resp.text)} empieza={resp.text[:80]!r}")
-
-        if resp.status_code == 200 and resp.text.strip().startswith("{"):
+        resp = requests.post(
+            "https://app.habi.co/api/properties/search",
+            json=payload,
+            headers={**get_headers(), "Content-Type": "application/json", "Origin": "https://habi.co"},
+            timeout=20,
+        )
+        print(f"[Habi API] status={resp.status_code} size={len(resp.text)}")
+        if resp.status_code == 200 and "application/json" in resp.headers.get("content-type",""):
             data  = resp.json()
-            items = data.get("results", data.get("data", []))
-            print(f"[Metrocuadrado] {len(items)} items")
-            for item in items:
+            items = data.get("properties") or data.get("results") or data.get("data") or []
+            print(f"[Habi API] {len(items)} items")
+            for item in items[:max_items]:
                 try:
-                    precio = item.get("salePrice") or item.get("rentPrice")
-                    area   = item.get("area") or item.get("builtArea")
-                    link   = item.get("link") or item.get("url") or ""
-                    if link and not link.startswith("http"):
-                        link = "https://www.metrocuadrado.com" + link
-                    img = None
-                    imgs = item.get("images") or item.get("photos") or []
-                    if imgs and isinstance(imgs, list):
-                        img = imgs[0].get("image") or imgs[0].get("url") if isinstance(imgs[0], dict) else imgs[0]
-                    resultado = prop_base(
-                        "Metrocuadrado",
-                        item.get("propertyType","Propiedad") + " en " + (item.get("neighborhood") or item.get("city") or ciudad_norm),
-                        item.get("neighborhood") or item.get("location"),
-                        item.get("city", criterios.ciudad),
-                        precio, area,
-                        item.get("bedrooms"), item.get("bathrooms"),
-                        item.get("garages"), item.get("stratum"),
-                        item.get("comment", ""),
-                        link,
-                    )
-                    resultado["imagen"] = img
-                    resultados.append(resultado)
+                    resultados.append(_habi_item(item, criterios.ciudad))
                 except: continue
-        else:
-            print(f"[Metrocuadrado] Respuesta no es JSON, primeros 200 chars: {resp.text[:200]}")
+
     except Exception as e:
-        print(f"[Metrocuadrado] Error: {e}")
-        import traceback; traceback.print_exc()
-    print(f"[Metrocuadrado] Total: {len(resultados)}")
+        print(f"[Habi API] Error: {e}")
+
+    # Intento 2: Página web de resultados con ScraperAPI
+    if not resultados:
+        try:
+            tipo_map = {"apartamento": "apartamento", "casa": "casa", "oficina": "oficina", "lote": "lote"}
+            op_map   = {"venta": "venta", "arriendo": "arriendo"}
+            ciudad_slug = criterios.ciudad.lower().replace(" ", "-")
+            url = f"https://habi.co/inmuebles-en-{op_map.get(criterios.operacion,'venta')}/{ciudad_slug}/"
+
+            resp = scraper_get(url)
+            print(f"[Habi web] status={resp.status_code} size={len(resp.text)}")
+
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+
+                # __NEXT_DATA__
+                script = soup.find("script", id="__NEXT_DATA__")
+                if script and script.string:
+                    data = json.loads(script.string)
+                    pp   = data.get("props", {}).get("pageProps", {})
+                    items = (pp.get("properties") or pp.get("listings") or
+                             pp.get("initialProps", {}).get("properties") or [])
+                    print(f"[Habi __NEXT_DATA__] {len(items)} items")
+                    for item in items[:max_items]:
+                        try:
+                            resultados.append(_habi_item(item, criterios.ciudad))
+                        except: continue
+
+                # JSON en scripts inline
+                if not resultados:
+                    for scr in soup.find_all("script"):
+                        src = scr.string or ""
+                        if "price" not in src and "precio" not in src: continue
+                        if len(src) < 200: continue
+                        for key in ['"properties"', '"listings"', '"results"']:
+                            m = re.search(re.escape(key) + r'\s*:\s*(\[.{100,}\])', src, re.DOTALL)
+                            if m:
+                                try:
+                                    items = json.loads(m.group(1))
+                                    for item in items[:max_items]:
+                                        try: resultados.append(_habi_item(item, criterios.ciudad))
+                                        except: continue
+                                    if resultados: break
+                                except: continue
+                        if resultados: break
+
+        except Exception as e:
+            print(f"[Habi web] Error: {e}")
+
+    print(f"[Habi] Total: {len(resultados)}")
     return resultados
+
+
+def _habi_item(item, ciudad):
+    precio = None
+    for k in ["price", "precio", "sale_price", "rent_price", "listing_price"]:
+        v = item.get(k)
+        if v:
+            precio = int(v) if isinstance(v, (int,float)) else limpiar_precio(str(v))
+            if precio: break
+
+    area = None
+    for k in ["area", "total_area", "built_area", "m2"]:
+        v = item.get(k)
+        if v:
+            try: area = float(v); break
+            except: area = limpiar_area(str(v))
+            if area: break
+
+    link = str(item.get("url") or item.get("link") or item.get("slug") or "")
+    if link and not link.startswith("http"):
+        link = "https://habi.co" + link
+
+    imgs = item.get("images") or item.get("photos") or []
+    img  = None
+    if imgs and isinstance(imgs, list):
+        first = imgs[0]
+        img = first.get("url") or first.get("src") or (first if isinstance(first, str) else None)
+
+    resultado = prop_base(
+        "Habi",
+        item.get("title") or item.get("name") or item.get("address") or "Propiedad Habi",
+        item.get("neighborhood") or item.get("barrio") or item.get("zone") or item.get("locality"),
+        item.get("city") or ciudad,
+        precio, area,
+        item.get("bedrooms") or item.get("habitaciones") or item.get("rooms"),
+        item.get("bathrooms") or item.get("banos"),
+        item.get("garages") or item.get("parking"),
+        item.get("stratum") or item.get("estrato"),
+        item.get("description") or item.get("descripcion") or "",
+        link,
+    )
+    resultado["imagen"] = img
+    return resultado
 
 
 def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
@@ -849,8 +907,8 @@ def ejecutar_alertas():
                     criterios      = CriteriosBusqueda(**criterios_dict)
                     todos          = []
                     por_portal     = max(8, criterios.max_resultados // max(len(criterios.portales), 1))
-                    if "metrocuadrado" in criterios.portales:
-                        todos.extend(scrape_metrocuadrado(criterios, por_portal))
+                    if "habi" in criterios.portales:
+                        todos.extend(scrape_habi(criterios, por_portal))
                     if "fincaraiz" in criterios.portales:
                         todos.extend(scrape_fincaraiz(criterios, por_portal))
                     if "ciencuadras" in criterios.portales:
@@ -1012,12 +1070,12 @@ def buscar(criterios: CriteriosBusqueda):
         por_portal = max(8, criterios.max_resultados // max(len(criterios.portales), 1))
         errores    = []
 
-        if "metrocuadrado" in criterios.portales:
+        if "habi" in criterios.portales:
             try:
-                todos.extend(scrape_metrocuadrado(criterios, por_portal))
+                todos.extend(scrape_habi(criterios, por_portal))
             except Exception as e:
-                errores.append(f"Metrocuadrado: {e}")
-                print(f"[buscar] Metrocuadrado fallo: {e}")
+                errores.append(f"Habi: {e}")
+                print(f"[buscar] Habi fallo: {e}")
 
         if "fincaraiz" in criterios.portales:
             try:
@@ -1052,12 +1110,10 @@ def buscar(criterios: CriteriosBusqueda):
                 msg += " Intenta ampliar el rango de precio o area."
             return {"resultados": [], "total": 0, "consejo_general": msg}
 
-        try:
-            filtrados = analizar_con_ia(filtrados, criterios)
-        except Exception as e:
-            print(f"[buscar] IA fallo: {e}")
-            for p in filtrados:
-                p.update({"score_ia": None, "analisis_ia": "", "en_top3": "", "razon_top3": ""})
+        # IA desactivada temporalmente
+        for p in filtrados:
+            p.update({"score_ia": None, "evaluacion_precio": "N/A",
+                      "analisis_ia": "", "en_top3": "", "razon_top3": "", "pros": "", "cons": ""})
 
         consejo = ""
         props   = []

@@ -226,86 +226,51 @@ def scrape_habi(criterios: CriteriosBusqueda, max_items=10):
     ciudad_nombre = ciudad_map.get(criterios.ciudad.lower(),
                     " ".join(w.capitalize() for w in criterios.ciudad.split()))
 
-    # Intento 1: API REST de Habi
+    # Habi: solo via ScraperAPI (Railway bloquea DNS externos)
     try:
-        payload = {
-            "city": ciudad_nombre,
-            "operation": "sell" if criterios.operacion == "venta" else "rent",
-            "property_type": criterios.tipo,
-            "page": 1,
-            "page_size": max_items,
-        }
-        if criterios.precio_min: payload["min_price"] = criterios.precio_min
-        if criterios.precio_max: payload["max_price"] = criterios.precio_max
-        if criterios.area_min:   payload["min_area"]  = criterios.area_min
-        if criterios.habitaciones_min: payload["min_bedrooms"] = criterios.habitaciones_min
+        ciudad_slug = criterios.ciudad.lower().replace(" ", "-")
+        op_map      = {"venta": "venta", "arriendo": "arriendo"}
+        url = f"https://habi.co/inmuebles-en-{op_map.get(criterios.operacion,'venta')}/{ciudad_slug}/"
 
-        resp = requests.post(
-            "https://app.habi.co/api/properties/search",
-            json=payload,
-            headers={**get_headers(), "Content-Type": "application/json", "Origin": "https://habi.co"},
-            timeout=20,
-        )
-        print(f"[Habi API] status={resp.status_code} size={len(resp.text)}")
-        if resp.status_code == 200 and "application/json" in resp.headers.get("content-type",""):
-            data  = resp.json()
-            items = data.get("properties") or data.get("results") or data.get("data") or []
-            print(f"[Habi API] {len(items)} items")
-            for item in items[:max_items]:
-                try:
-                    resultados.append(_habi_item(item, criterios.ciudad))
-                except: continue
+        resp = scraper_get(url)
+        print(f"[Habi web] status={resp.status_code} size={len(resp.text)}")
+
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # __NEXT_DATA__
+            script = soup.find("script", id="__NEXT_DATA__")
+            if script and script.string:
+                data = json.loads(script.string)
+                pp   = data.get("props", {}).get("pageProps", {})
+                items = (pp.get("properties") or pp.get("listings") or
+                         pp.get("initialProps", {}).get("properties") or [])
+                print(f"[Habi __NEXT_DATA__] {len(items)} items")
+                for item in items[:max_items]:
+                    try:
+                        resultados.append(_habi_item(item, criterios.ciudad))
+                    except: continue
+
+            # JSON en scripts inline
+            if not resultados:
+                for scr in soup.find_all("script"):
+                    src = scr.string or ""
+                    if "price" not in src and "precio" not in src: continue
+                    if len(src) < 200: continue
+                    for key in ['"properties"', '"listings"', '"results"']:
+                        m = re.search(re.escape(key) + r'\s*:\s*(\[.{100,}\])', src, re.DOTALL)
+                        if m:
+                            try:
+                                items = json.loads(m.group(1))
+                                for item in items[:max_items]:
+                                    try: resultados.append(_habi_item(item, criterios.ciudad))
+                                    except: continue
+                                if resultados: break
+                            except: continue
+                    if resultados: break
 
     except Exception as e:
-        print(f"[Habi API] Error: {e}")
-
-    # Intento 2: Página web de resultados con ScraperAPI
-    if not resultados:
-        try:
-            tipo_map = {"apartamento": "apartamento", "casa": "casa", "oficina": "oficina", "lote": "lote"}
-            op_map   = {"venta": "venta", "arriendo": "arriendo"}
-            ciudad_slug = criterios.ciudad.lower().replace(" ", "-")
-            url = f"https://habi.co/inmuebles-en-{op_map.get(criterios.operacion,'venta')}/{ciudad_slug}/"
-
-            resp = scraper_get(url)
-            print(f"[Habi web] status={resp.status_code} size={len(resp.text)}")
-
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "html.parser")
-
-                # __NEXT_DATA__
-                script = soup.find("script", id="__NEXT_DATA__")
-                if script and script.string:
-                    data = json.loads(script.string)
-                    pp   = data.get("props", {}).get("pageProps", {})
-                    items = (pp.get("properties") or pp.get("listings") or
-                             pp.get("initialProps", {}).get("properties") or [])
-                    print(f"[Habi __NEXT_DATA__] {len(items)} items")
-                    for item in items[:max_items]:
-                        try:
-                            resultados.append(_habi_item(item, criterios.ciudad))
-                        except: continue
-
-                # JSON en scripts inline
-                if not resultados:
-                    for scr in soup.find_all("script"):
-                        src = scr.string or ""
-                        if "price" not in src and "precio" not in src: continue
-                        if len(src) < 200: continue
-                        for key in ['"properties"', '"listings"', '"results"']:
-                            m = re.search(re.escape(key) + r'\s*:\s*(\[.{100,}\])', src, re.DOTALL)
-                            if m:
-                                try:
-                                    items = json.loads(m.group(1))
-                                    for item in items[:max_items]:
-                                        try: resultados.append(_habi_item(item, criterios.ciudad))
-                                        except: continue
-                                    if resultados: break
-                                except: continue
-                        if resultados: break
-
-        except Exception as e:
-            print(f"[Habi web] Error: {e}")
+        print(f"[Habi web] Error: {e}")
 
     print(f"[Habi] Total: {len(resultados)}")
     return resultados
@@ -538,13 +503,18 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
                         link = item.get("url") or ""
                         if link and not link.startswith("http"):
                             link = "https://www.ciencuadras.com" + link
-                        # precio puede venir como int (280000000) o string
-                        precio_raw = item.get("price") or item.get("precio") or 0
-                        precio = int(precio_raw) if str(precio_raw).isdigit() else limpiar_precio(str(precio_raw))
-                        area   = limpiar_area(str(item.get("area") or item.get("builtArea") or ""))
-                        barrio = item.get("neighborhood") or item.get("sector") or item.get("locality") or ""
+                        # precio: int, float, o string con puntos/comas
+                        precio_raw = item.get("price") or item.get("precio") or item.get("valor") or 0
+                        if isinstance(precio_raw, (int, float)) and precio_raw > 0:
+                            precio = int(precio_raw)
+                        else:
+                            precio = limpiar_precio(str(precio_raw))
+                        area_raw = item.get("area") or item.get("builtArea") or item.get("totalArea") or ""
+                        area = float(area_raw) if isinstance(area_raw, (int,float)) and area_raw else limpiar_area(str(area_raw))
+                        barrio = item.get("neighborhood") or item.get("sector") or item.get("locality") or item.get("location") or ""
                         ciudad_item = item.get("city") or criterios.ciudad
                         titulo = f"{item.get('realEstateType') or 'Propiedad'} en {barrio or ciudad_item}"
+                        print(f"[CC item] precio_raw={precio_raw!r} → precio={precio} | area={area} | link={item.get('url','')[:50]}")
                         resultado = prop_base(
                             "Ciencuadras", titulo, barrio, ciudad_item,
                             precio, area,
@@ -745,34 +715,80 @@ def scrape_facebook(criterios: CriteriosBusqueda, max_items=10):
 
 # ── Filtros ────────────────────────────────────────────────────────────────────
 
+def _to_int(val):
+    """Convierte habitaciones/baños/parqueadero a int de forma segura."""
+    if val is None: return None
+    try: return int(float(str(val)))
+    except: return None
+
 def aplicar_filtros(resultados, criterios: CriteriosBusqueda):
-    filtrados = []
-    descartados = 0
+    filtrados  = []
+    descartados_detalle = {}
+
     for p in resultados:
         precio = p.get("precio")
         area   = p.get("area")
-        # Filtrar por precio solo si el inmueble tiene precio conocido
-        # Margen del 15% para no descartar inmuebles cercanos al límite
+        razon  = None
+
+        # ── Precio ──────────────────────────────────────────────────────────────
+        # Solo filtrar si el inmueble TIENE precio (sin precio = incluir siempre)
         if precio and precio > 0:
             if criterios.precio_min and precio < criterios.precio_min * 0.85:
-                descartados += 1; continue
-            if criterios.precio_max and criterios.precio_max > 0 and precio > criterios.precio_max * 1.15:
-                descartados += 1; continue
-        # Filtrar por área solo si el inmueble tiene área conocida
-        if area and area > 0:
+                razon = f"precio {precio:,} < min {criterios.precio_min:,}"
+            elif criterios.precio_max and criterios.precio_max > 0 and precio > criterios.precio_max * 1.15:
+                razon = f"precio {precio:,} > max {criterios.precio_max:,}"
+
+        # ── Área ─────────────────────────────────────────────────────────────────
+        # Solo filtrar si el inmueble TIENE área conocida
+        if not razon and area and area > 0:
             if criterios.area_min and area < criterios.area_min * 0.85:
-                descartados += 1; continue
-            if criterios.area_max and criterios.area_max > 0 and area > criterios.area_max * 1.15:
-                descartados += 1; continue
-        if criterios.parqueadero and not p.get("parqueadero"):
-            descartados += 1; continue
-        estrato = p.get("estrato")
-        if estrato and str(estrato).strip().isdigit():
-            e = int(str(estrato).strip())
-            if criterios.estrato_min and e < criterios.estrato_min: descartados += 1; continue
-            if criterios.estrato_max and e > criterios.estrato_max: descartados += 1; continue
-        filtrados.append(p)
-    print(f"[filtros] {len(resultados)} brutos → {len(filtrados)} pasan ({descartados} descartados)")
+                razon = f"area {area:.0f} < min {criterios.area_min}"
+            elif criterios.area_max and criterios.area_max > 0 and area > criterios.area_max * 1.15:
+                razon = f"area {area:.0f} > max {criterios.area_max}"
+
+        # ── Habitaciones ─────────────────────────────────────────────────────────
+        # Solo filtrar si el inmueble TIENE habitaciones conocidas
+        if not razon and criterios.habitaciones_min:
+            hab = _to_int(p.get("habitaciones"))
+            if hab is not None and hab < criterios.habitaciones_min:
+                razon = f"hab {hab} < min {criterios.habitaciones_min}"
+
+        # ── Parqueadero ──────────────────────────────────────────────────────────
+        # Solo descartar si el campo existe Y es explícitamente 0/None/vacío
+        # Si el campo no existe (None), incluimos el inmueble (dato desconocido)
+        if not razon and criterios.parqueadero:
+            pq = p.get("parqueadero")
+            pq_int = _to_int(pq)
+            # Descartamos solo si el dato existe Y confirma que NO hay parqueadero
+            if pq is not None and pq_int is not None and pq_int == 0:
+                razon = "sin parqueadero (confirmado)"
+
+        # ── Estrato ───────────────────────────────────────────────────────────────
+        if not razon:
+            estrato = _to_int(p.get("estrato"))
+            if estrato is not None:
+                if criterios.estrato_min and estrato < criterios.estrato_min:
+                    razon = f"estrato {estrato} < min {criterios.estrato_min}"
+                elif criterios.estrato_max and estrato > criterios.estrato_max:
+                    razon = f"estrato {estrato} > max {criterios.estrato_max}"
+
+        if razon:
+            descartados_detalle[razon] = descartados_detalle.get(razon, 0) + 1
+        else:
+            filtrados.append(p)
+
+    total_desc = sum(descartados_detalle.values())
+    print(f"[filtros] {len(resultados)} brutos → {len(filtrados)} pasan ({total_desc} descartados)")
+    if descartados_detalle:
+        for razon, cnt in sorted(descartados_detalle.items(), key=lambda x: -x[1]):
+            print(f"[filtros]   - {cnt}x {razon}")
+    # Rango de precios para diagnóstico
+    precios = [p["precio"] for p in resultados if p.get("precio") and p["precio"] > 0]
+    if precios:
+        print(f"[filtros] Precios en resultados: ${min(precios):,} – ${max(precios):,}")
+    areas = [p["area"] for p in resultados if p.get("area") and p["area"] > 0]
+    if areas:
+        print(f"[filtros] Áreas en resultados: {min(areas):.0f}m² – {max(areas):.0f}m²")
     return filtrados
 
 

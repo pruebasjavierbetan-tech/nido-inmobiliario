@@ -353,8 +353,7 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
         "lote":        ["lote", "terreno", "land"],
     }
     tipos_validos   = tipo_fr_map.get(criterios.tipo.lower(), [criterios.tipo.lower()])
-    ciudad_norm     = _norm(criterios.ciudad)
-    es_principal    = criterios.ciudad.lower() in ("bogota","medellin","cali","barranquilla","cartagena","bucaramanga")
+    ciudad_norm     = _norm(criterios.ciudad)  # usado en logs
 
     resultados  = []
     pagina      = 1
@@ -403,25 +402,8 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
                     if tipos_validos and not any(t in tipo_item for t in tipos_validos):
                         continue
 
-                    # ── Filtro ciudad ──────────────────────────────────────────
-                    if not es_principal:
-                        locs = item.get("locations") or {}
-                        def _loc_names(key):
-                            lst = locs.get(key) or []
-                            return [_norm(x.get("name","")) for x in lst if isinstance(x, dict)]
-                        todas = (
-                            _loc_names("city") + _loc_names("state") +
-                            _loc_names("locality") + _loc_names("neighbourhood") +
-                            _loc_names("zone") + _loc_names("region") +
-                            [_norm(locs.get("location_main",{}).get("name",""))] +
-                            [_norm(item.get("address",""))]
-                        )
-                        # Log del primer item rechazado para diagnóstico
-                        if pagina == 1 and aceptados_pagina == 0 and len(resultados) == 0:
-                            print(f"[FR debug ciudad] buscando='{ciudad_norm}' | todas_locs={todas[:8]}")
-                            print(f"[FR debug item] address={item.get('address')} | title={item.get('title','')[:50]}")
-                        if not any(ciudad_norm in loc for loc in todas if loc):
-                            continue
+                    # Filtro ciudad eliminado: Finca Raíz gestiona la ciudad via URL
+                    # La IA advierte si el inmueble no corresponde a la ciudad buscada
 
                     resultados.append(_fr_item(item, criterios.ciudad))
                     aceptados_pagina += 1
@@ -734,8 +716,7 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
         "lote":        ["lote", "terreno", "land"],
     }
     tipos_validos   = tipo_fr_map.get(criterios.tipo.lower(), [criterios.tipo.lower()])
-    ciudad_norm     = _norm(criterios.ciudad)
-    es_principal    = criterios.ciudad.lower() in ("bogota","medellin","cali","barranquilla","cartagena","bucaramanga")
+    ciudad_norm     = _norm(criterios.ciudad)  # usado en logs
 
     resultados  = []
     pagina      = 1
@@ -784,25 +765,8 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
                     if tipos_validos and not any(t in tipo_item for t in tipos_validos):
                         continue
 
-                    # ── Filtro ciudad ──────────────────────────────────────────
-                    if not es_principal:
-                        locs = item.get("locations") or {}
-                        def _loc_names(key):
-                            lst = locs.get(key) or []
-                            return [_norm(x.get("name","")) for x in lst if isinstance(x, dict)]
-                        todas = (
-                            _loc_names("city") + _loc_names("state") +
-                            _loc_names("locality") + _loc_names("neighbourhood") +
-                            _loc_names("zone") + _loc_names("region") +
-                            [_norm(locs.get("location_main",{}).get("name",""))] +
-                            [_norm(item.get("address",""))]
-                        )
-                        # Log del primer item rechazado para diagnóstico
-                        if pagina == 1 and aceptados_pagina == 0 and len(resultados) == 0:
-                            print(f"[FR debug ciudad] buscando='{ciudad_norm}' | todas_locs={todas[:8]}")
-                            print(f"[FR debug item] address={item.get('address')} | title={item.get('title','')[:50]}")
-                        if not any(ciudad_norm in loc for loc in todas if loc):
-                            continue
+                    # Filtro ciudad eliminado: Finca Raíz gestiona la ciudad via URL
+                    # La IA advierte si el inmueble no corresponde a la ciudad buscada
 
                     resultados.append(_fr_item(item, criterios.ciudad))
                     aceptados_pagina += 1

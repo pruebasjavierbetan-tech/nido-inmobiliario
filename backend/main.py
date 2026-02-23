@@ -388,15 +388,27 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
                     continue
 
                 # Filtrar por ciudad: aceptar si coincide o si es municipio aledaño buscado
-                locs      = item.get("locations") or {}
-                city_list = locs.get("city") or []
-                city_name = city_list[0].get("name","").lower() if city_list else ""
-                loc_main  = locs.get("location_main", {}).get("name","").lower()
-                if ciudad_lower not in ("bogota", "medellin", "cali", "barranquilla"):
-                    # Para municipios pequeños ser estrictos con la ciudad
-                    if ciudad_lower not in city_name and ciudad_lower not in loc_main:
-                        print(f"[FR filtro ciudad] descartado: city={city_name} main={loc_main}")
-                        continue
+                # Extraer todos los nombres de ubicación del item
+                locs       = item.get("locations") or {}
+                def _names(key):
+                    lst = locs.get(key) or []
+                    return [x.get("name","").lower() for x in lst if isinstance(x, dict)]
+                todas_locs = (
+                    _names("city") + _names("state") + _names("locality") +
+                    _names("neighbourhood") + _names("zone") + _names("region") +
+                    [locs.get("location_main", {}).get("name","").lower()]
+                )
+                # Normalizar ciudad buscada: quitar tildes para comparar
+                import unicodedata
+                def _norm(s):
+                    return unicodedata.normalize("NFKD", s).encode("ascii","ignore").decode().lower()
+                ciudad_norm = _norm(criterios.ciudad)
+                match_ciudad = any(ciudad_norm in _norm(loc) for loc in todas_locs if loc)
+                # Para ciudades principales aceptar resultados sin filtro estricto
+                es_ciudad_principal = ciudad_lower in ("bogota", "medellin", "cali", "barranquilla", "cartagena", "bucaramanga")
+                if not es_ciudad_principal and not match_ciudad:
+                    print(f"[FR filtro ciudad] descartado '{criterios.ciudad}' no en: {[l for l in todas_locs if l][:5]}")
+                    continue
 
                 resultados.append(_fr_item(item, criterios.ciudad))
                 if len(resultados) >= max_items:
@@ -545,6 +557,16 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
                         area = float(area_raw) if isinstance(area_raw, (int,float)) and area_raw else limpiar_area(str(area_raw))
                         barrio = item.get("neighborhood") or item.get("sector") or item.get("locality") or item.get("location") or ""
                         ciudad_item = item.get("city") or criterios.ciudad
+                        # Filtrar por ciudad — Ciencuadras puede devolver items de otras ciudades
+                        import unicodedata as _ud
+                        def _norm2(s): return _ud.normalize("NFKD",str(s)).encode("ascii","ignore").decode().lower()
+                        ciudad_lower2 = _norm2(criterios.ciudad)
+                        ciudad_item_norm = _norm2(ciudad_item)
+                        dept_norm = _norm2(item.get("department",""))
+                        es_principal2 = ciudad_lower2 in ("bogota","medellin","cali","barranquilla","cartagena","bucaramanga")
+                        if not es_principal2 and ciudad_lower2 not in ciudad_item_norm and ciudad_lower2 not in dept_norm:
+                            print(f"[CC filtro ciudad] descartado: ciudad_item={ciudad_item}")
+                            continue
                         titulo = f"{item.get('realEstateType') or 'Propiedad'} en {barrio or ciudad_item}"
 
                         resultado = prop_base(
@@ -730,15 +752,27 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
                     continue
 
                 # Filtrar por ciudad: aceptar si coincide o si es municipio aledaño buscado
-                locs      = item.get("locations") or {}
-                city_list = locs.get("city") or []
-                city_name = city_list[0].get("name","").lower() if city_list else ""
-                loc_main  = locs.get("location_main", {}).get("name","").lower()
-                if ciudad_lower not in ("bogota", "medellin", "cali", "barranquilla"):
-                    # Para municipios pequeños ser estrictos con la ciudad
-                    if ciudad_lower not in city_name and ciudad_lower not in loc_main:
-                        print(f"[FR filtro ciudad] descartado: city={city_name} main={loc_main}")
-                        continue
+                # Extraer todos los nombres de ubicación del item
+                locs       = item.get("locations") or {}
+                def _names(key):
+                    lst = locs.get(key) or []
+                    return [x.get("name","").lower() for x in lst if isinstance(x, dict)]
+                todas_locs = (
+                    _names("city") + _names("state") + _names("locality") +
+                    _names("neighbourhood") + _names("zone") + _names("region") +
+                    [locs.get("location_main", {}).get("name","").lower()]
+                )
+                # Normalizar ciudad buscada: quitar tildes para comparar
+                import unicodedata
+                def _norm(s):
+                    return unicodedata.normalize("NFKD", s).encode("ascii","ignore").decode().lower()
+                ciudad_norm = _norm(criterios.ciudad)
+                match_ciudad = any(ciudad_norm in _norm(loc) for loc in todas_locs if loc)
+                # Para ciudades principales aceptar resultados sin filtro estricto
+                es_ciudad_principal = ciudad_lower in ("bogota", "medellin", "cali", "barranquilla", "cartagena", "bucaramanga")
+                if not es_ciudad_principal and not match_ciudad:
+                    print(f"[FR filtro ciudad] descartado '{criterios.ciudad}' no en: {[l for l in todas_locs if l][:5]}")
+                    continue
 
                 resultados.append(_fr_item(item, criterios.ciudad))
                 if len(resultados) >= max_items:
@@ -887,6 +921,16 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
                         area = float(area_raw) if isinstance(area_raw, (int,float)) and area_raw else limpiar_area(str(area_raw))
                         barrio = item.get("neighborhood") or item.get("sector") or item.get("locality") or item.get("location") or ""
                         ciudad_item = item.get("city") or criterios.ciudad
+                        # Filtrar por ciudad — Ciencuadras puede devolver items de otras ciudades
+                        import unicodedata as _ud
+                        def _norm2(s): return _ud.normalize("NFKD",str(s)).encode("ascii","ignore").decode().lower()
+                        ciudad_lower2 = _norm2(criterios.ciudad)
+                        ciudad_item_norm = _norm2(ciudad_item)
+                        dept_norm = _norm2(item.get("department",""))
+                        es_principal2 = ciudad_lower2 in ("bogota","medellin","cali","barranquilla","cartagena","bucaramanga")
+                        if not es_principal2 and ciudad_lower2 not in ciudad_item_norm and ciudad_lower2 not in dept_norm:
+                            print(f"[CC filtro ciudad] descartado: ciudad_item={ciudad_item}")
+                            continue
                         titulo = f"{item.get('realEstateType') or 'Propiedad'} en {barrio or ciudad_item}"
 
                         resultado = prop_base(
@@ -1187,7 +1231,9 @@ def aplicar_filtros(resultados, criterios: CriteriosBusqueda):
         if not razon:
             estrato = _to_int(p.get("estrato"))
             if estrato is not None:
-                if criterios.estrato_min and estrato < criterios.estrato_min:
+                if estrato < 1 or estrato > 6:
+                    razon = f"estrato inválido ({estrato})"
+                elif criterios.estrato_min and estrato < criterios.estrato_min:
                     razon = f"estrato {estrato} < min {criterios.estrato_min}"
                 elif criterios.estrato_max and estrato > criterios.estrato_max:
                     razon = f"estrato {estrato} > max {criterios.estrato_max}"

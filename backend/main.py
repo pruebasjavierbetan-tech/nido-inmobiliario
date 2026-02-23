@@ -651,21 +651,43 @@ def scrape_facebook(criterios: CriteriosBusqueda, max_items=10):
         if criterios.precio_min: params["minPrice"] = criterios.precio_min
         if criterios.precio_max: params["maxPrice"] = criterios.precio_max
 
-        resp = scraper_get(url, params)
+        # Facebook requiere JS rendering — usar ScraperAPI con render=true
+        target = url
+        if params:
+            qs = "&".join(f"{k}={v}" for k,v in params.items())
+            target = f"{url}?{qs}"
+
+        if SCRAPER_API_KEY:
+            resp = requests.get(
+                "https://api.scraperapi.com",
+                params={
+                    "api_key":      SCRAPER_API_KEY,
+                    "url":          target,
+                    "render":       "true",
+                    "country_code": "co",
+                },
+                timeout=90,
+            )
+        else:
+            resp = requests.get(target, headers=get_headers(), timeout=20)
+
         print(f"[Facebook] status={resp.status_code} size={len(resp.text)}")
 
-        if resp.status_code != 200:
-            print(f"[Facebook] No accesible: {resp.status_code}")
+        if resp.status_code not in (200, 302):
+            print(f"[Facebook] No accesible: {resp.status_code} — {resp.text[:100]}")
             return resultados
 
         # FB embebe datos en window.__BBQ_STATE__ o __RELAY_STORE__
         html = resp.text
 
         # Buscar JSON con listings de marketplace
+        # Facebook embebe datos en múltiples formatos según la versión
         patterns = [
-            r'"marketplace_search".*?"edges"\s*:\s*(\[.{100,}\])\s*[,}]',
-            r'"for_sale_items".*?"edges"\s*:\s*(\[.{100,}\])\s*[,}]',
-            r'"nodes"\s*:\s*(\[.{200,}\])',
+            r'"marketplace_search"[^}]*?"edges"\s*:\s*(\[.{100,}?\])\s*[,}]',
+            r'"for_sale_items"[^}]*?"edges"\s*:\s*(\[.{100,}?\])\s*[,}]',
+            r'"feed_units"[^}]*?"edges"\s*:\s*(\[.{100,}?\])\s*[,}]',
+            r'"marketplace_listing_renderable_targets"[^}]*?"nodes"\s*:\s*(\[.{100,}?\])',
+            r'"viewer"[^}]*?"marketplace_feed_stories"[^}]*?"edges"\s*:\s*(\[.{100,}?\])',
         ]
         items_raw = []
         for pat in patterns:
@@ -673,11 +695,33 @@ def scrape_facebook(criterios: CriteriosBusqueda, max_items=10):
             if m:
                 try:
                     edges = json.loads(m.group(1))
-                    print(f"[Facebook] {len(edges)} edges encontrados")
+                    print(f"[Facebook] {len(edges)} edges con patrón encontrado")
                     items_raw = edges
                     break
                 except:
                     continue
+
+        # Alternativa: buscar JSON de precios directamente
+        if not items_raw:
+            price_matches = re.findall(r'"listing_price"\s*:\s*\{"amount"\s*:\s*"(\d+)"', html)
+            title_matches = re.findall(r'"marketplace_listing_title"\s*:\s*"([^"]+)"', html)
+            id_matches    = re.findall(r'"id"\s*:\s*"(\d{15,})"', html)
+            link_matches  = re.findall(r'"/marketplace/item/(\d+)/"', html)
+            print(f"[Facebook directo] precios={len(price_matches)} títulos={len(title_matches)}")
+            seen = set()
+            for i, (precio_str, link_id) in enumerate(zip(price_matches, link_matches)):
+                if link_id in seen: continue
+                seen.add(link_id)
+                titulo = title_matches[i] if i < len(title_matches) else "Propiedad en Facebook"
+                resultado = prop_base(
+                    "Facebook", titulo, None, criterios.ciudad,
+                    int(precio_str) if precio_str else None,
+                    None, None, None, None, None, "",
+                    f"https://www.facebook.com/marketplace/item/{link_id}/",
+                )
+                resultados.append(resultado)
+            if resultados:
+                print(f"[Facebook] {len(resultados)} items vía extracción directa")
 
         for edge in items_raw[:max_items]:
             try:
@@ -836,11 +880,13 @@ def analizar_con_ia(propiedades, criterios: CriteriosBusqueda):
                       "en_top3": "", "razon_top3": ""})
         return propiedades
 
-    # Crear cliente con httpx sin proxies (ScraperAPI inyecta HTTP_PROXY que rompe anthropic)
+    # Limpiar variables de proxy que ScraperAPI inyecta en el entorno
+    import os as _os, httpx as _httpx
+    for _k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]:
+        _os.environ.pop(_k, None)
     try:
-        import httpx
-        http_client = httpx.Client(proxy=None, timeout=60)
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, http_client=http_client)
+        _http = _httpx.Client(transport=_httpx.HTTPTransport(proxy=None), timeout=60)
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, http_client=_http)
     except Exception:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     props_text = ""
@@ -1160,10 +1206,14 @@ def buscar(criterios: CriteriosBusqueda):
                 msg += " Intenta ampliar el rango de precio o area."
             return {"resultados": [], "total": 0, "consejo_general": msg}
 
-        # IA desactivada temporalmente
-        for p in filtrados:
-            p.update({"score_ia": None, "evaluacion_precio": "N/A",
-                      "analisis_ia": "", "en_top3": "", "razon_top3": "", "pros": "", "cons": ""})
+        # Análisis IA
+        try:
+            filtrados = analizar_con_ia(filtrados, criterios)
+        except Exception as e:
+            print(f"[buscar] IA fallo: {e}")
+            for p in filtrados:
+                p.update({"score_ia": None, "evaluacion_precio": "N/A",
+                          "analisis_ia": "", "en_top3": "", "razon_top3": "", "pros": "", "cons": ""})
 
         consejo = ""
         props   = []

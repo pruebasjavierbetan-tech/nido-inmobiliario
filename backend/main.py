@@ -321,10 +321,18 @@ def _habi_item(item, ciudad):
 
 def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
     """
-    Finca Raiz: los datos estan en fetchResult.searchFast.data (lista de inmuebles).
-    fetchResult.property contiene el inmueble destacado individual.
+    Finca Raiz devuelve ~21 items por página mezclando tipos.
+    Paginamos hasta 4 páginas para acumular suficientes del tipo correcto.
     """
-    resultados = []
+    import unicodedata
+
+    def to_slug(s):
+        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+        return s.lower().strip().replace(" ", "-")
+
+    def _norm(s):
+        return unicodedata.normalize("NFKD", str(s)).encode("ascii","ignore").decode().lower()
+
     ciudad_map = {
         "bogota": "bogota-dc", "medellin": "antioquia/medellin",
         "cali": "valle-del-cauca/cali", "barranquilla": "atlantico/barranquilla",
@@ -335,99 +343,102 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
         "pasto": "narino/pasto", "monteria": "cordoba/monteria",
         "armenia": "quindio/armenia", "neiva": "huila/neiva",
     }
-    # Para ciudades no mapeadas: convertir a slug (minúsculas, espacios -> guiones, sin tildes)
-    import unicodedata
-    def to_slug(s):
-        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
-        return s.lower().strip().replace(" ", "-")
     ciudad_url = ciudad_map.get(criterios.ciudad.lower(), to_slug(criterios.ciudad))
-    url = f"https://www.fincaraiz.com.co/{criterios.tipo}/{criterios.operacion}/{ciudad_url}/"
-    params = {}
-    if criterios.precio_min:       params["precio-desde"] = criterios.precio_min
-    if criterios.precio_max:       params["precio-hasta"] = criterios.precio_max
-    if criterios.area_min:         params["area-desde"]   = criterios.area_min
-    if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
-    try:
-        resp = scraper_get(url, params, premium=True)
-        print(f"[FincaRaiz] status={resp.status_code} size={len(resp.text)}")
-        soup = BeautifulSoup(resp.text, "html.parser")
-        script = soup.find("script", id="__NEXT_DATA__")
-        if not script or not script.string:
-            print("[FincaRaiz] Sin __NEXT_DATA__")
-            return resultados
+    base_url   = f"https://www.fincaraiz.com.co/{criterios.tipo}/{criterios.operacion}/{ciudad_url}/"
 
-        data  = json.loads(script.string)
-        pp    = data.get("props", {}).get("pageProps", {})
-        fetch = pp.get("fetchResult", {})
+    tipo_fr_map = {
+        "apartamento": ["apartamento", "apartment"],
+        "casa":        ["casa", "house", "casas"],
+        "oficina":     ["oficina", "office"],
+        "lote":        ["lote", "terreno", "land"],
+    }
+    tipos_validos   = tipo_fr_map.get(criterios.tipo.lower(), [criterios.tipo.lower()])
+    ciudad_norm     = _norm(criterios.ciudad)
+    es_principal    = criterios.ciudad.lower() in ("bogota","medellin","cali","barranquilla","cartagena","bucaramanga")
 
-        # Fuente principal: fetchResult.searchFast.data
-        search_fast = fetch.get("searchFast", {})
-        items = search_fast.get("data") or []
-        if isinstance(items, dict):
-            # a veces data es {listings: [...]}
-            items = items.get("listings") or items.get("results") or list(items.values())
-            if items and isinstance(items[0], dict) and "data" in items[0]:
-                items = items[0]["data"]
-        print(f"[FincaRaiz searchFast.data] {len(items)} items")
-        tipo_fr_map = {
-            "apartamento": ["apartamento", "apartment"],
-            "casa":        ["casa", "house", "casas"],
-            "oficina":     ["oficina", "office"],
-            "lote":        ["lote", "terreno", "land"],
-        }
-        tipos_validos = tipo_fr_map.get(criterios.tipo.lower(), [criterios.tipo.lower()])
-        ciudad_lower  = criterios.ciudad.lower()
+    resultados  = []
+    pagina      = 1
+    max_paginas = 4  # máximo 4 páginas = ~84 items revisados
 
-        for item in items:
-            try:
-                # Filtrar por tipo de inmueble
-                tipo_item = str(item.get("property_type", {}).get("name") or
-                                item.get("propertyType") or "").lower()
-                if tipos_validos and not any(t in tipo_item for t in tipos_validos):
-                    print(f"[FR filtro tipo] descartado: {tipo_item}")
+    while len(resultados) < max_items and pagina <= max_paginas:
+        params = {"pagina": pagina}
+        if criterios.precio_min:       params["precio-desde"] = criterios.precio_min
+        if criterios.precio_max:       params["precio-hasta"] = criterios.precio_max
+        if criterios.area_min:         params["area-desde"]   = criterios.area_min
+        if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
+
+        try:
+            resp = scraper_get(base_url, params, premium=True)
+            print(f"[FincaRaiz p{pagina}] status={resp.status_code} size={len(resp.text)}")
+            if resp.status_code != 200:
+                break
+
+            soup   = BeautifulSoup(resp.text, "html.parser")
+            script = soup.find("script", id="__NEXT_DATA__")
+            if not script or not script.string:
+                print(f"[FincaRaiz p{pagina}] Sin __NEXT_DATA__")
+                break
+
+            data        = json.loads(script.string)
+            pp          = data.get("props", {}).get("pageProps", {})
+            search_fast = pp.get("fetchResult", {}).get("searchFast", {})
+            items       = search_fast.get("data") or []
+            if isinstance(items, dict):
+                items = items.get("listings") or items.get("results") or list(items.values())
+            if not items:
+                print(f"[FincaRaiz p{pagina}] Sin items, fin de paginación")
+                break
+
+            # Verificar si hay más páginas
+            paginator    = search_fast.get("paginatorInfo") or {}
+            total_paginas = paginator.get("lastPage") or paginator.get("totalPages") or pagina
+            print(f"[FincaRaiz p{pagina}/{total_paginas}] {len(items)} items en página")
+
+            aceptados_pagina = 0
+            for item in items:
+                try:
+                    # ── Filtro tipo ────────────────────────────────────────────
+                    tipo_item = _norm(item.get("property_type", {}).get("name") or
+                                     item.get("propertyType") or "")
+                    if tipos_validos and not any(t in tipo_item for t in tipos_validos):
+                        continue
+
+                    # ── Filtro ciudad ──────────────────────────────────────────
+                    if not es_principal:
+                        locs = item.get("locations") or {}
+                        def _loc_names(key):
+                            lst = locs.get(key) or []
+                            return [_norm(x.get("name","")) for x in lst if isinstance(x, dict)]
+                        todas = (
+                            _loc_names("city") + _loc_names("state") +
+                            _loc_names("locality") + _loc_names("neighbourhood") +
+                            [_norm(locs.get("location_main",{}).get("name",""))]
+                        )
+                        if not any(ciudad_norm in loc for loc in todas if loc):
+                            continue
+
+                    resultados.append(_fr_item(item, criterios.ciudad))
+                    aceptados_pagina += 1
+                    if len(resultados) >= max_items:
+                        break
+                except Exception as e:
+                    print(f"[FR item error] {e}")
                     continue
 
-                # Filtrar por ciudad: aceptar si coincide o si es municipio aledaño buscado
-                # Extraer todos los nombres de ubicación del item
-                locs       = item.get("locations") or {}
-                def _names(key):
-                    lst = locs.get(key) or []
-                    return [x.get("name","").lower() for x in lst if isinstance(x, dict)]
-                todas_locs = (
-                    _names("city") + _names("state") + _names("locality") +
-                    _names("neighbourhood") + _names("zone") + _names("region") +
-                    [locs.get("location_main", {}).get("name","").lower()]
-                )
-                # Normalizar ciudad buscada: quitar tildes para comparar
-                import unicodedata
-                def _norm(s):
-                    return unicodedata.normalize("NFKD", s).encode("ascii","ignore").decode().lower()
-                ciudad_norm = _norm(criterios.ciudad)
-                match_ciudad = any(ciudad_norm in _norm(loc) for loc in todas_locs if loc)
-                # Para ciudades principales aceptar resultados sin filtro estricto
-                es_ciudad_principal = ciudad_lower in ("bogota", "medellin", "cali", "barranquilla", "cartagena", "bucaramanga")
-                if not es_ciudad_principal and not match_ciudad:
-                    print(f"[FR filtro ciudad] descartado '{criterios.ciudad}' no en: {[l for l in todas_locs if l][:5]}")
-                    continue
+            print(f"[FincaRaiz p{pagina}] {aceptados_pagina} aceptados → total {len(resultados)}")
 
-                resultados.append(_fr_item(item, criterios.ciudad))
-                if len(resultados) >= max_items:
-                    break
-            except Exception as e:
-                print(f"[FR item error] {e}")
-                continue
+            if pagina >= total_paginas:
+                break
+            if len(items) < 5:  # página casi vacía, parar
+                break
+            pagina += 1
 
-        # Fuente secundaria: fetchResult.property (inmueble destacado)
-        if not resultados:
-            prop = fetch.get("property")
-            if isinstance(prop, dict) and prop.get("id"):
-                try: resultados.append(_fr_item(prop, criterios.ciudad))
-                except: pass
+        except Exception as e:
+            print(f"[FincaRaiz p{pagina}] Error: {e}")
+            import traceback; traceback.print_exc()
+            break
 
-    except Exception as e:
-        print(f"[FincaRaiz] Error: {e}")
-        import traceback; traceback.print_exc()
-    print(f"[FincaRaiz] Total: {len(resultados)}")
+    print(f"[FincaRaiz] Total final: {len(resultados)} en {pagina} página(s)")
     return resultados
 
 
@@ -685,10 +696,18 @@ def _habi_item(item, ciudad):
 
 def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
     """
-    Finca Raiz: los datos estan en fetchResult.searchFast.data (lista de inmuebles).
-    fetchResult.property contiene el inmueble destacado individual.
+    Finca Raiz devuelve ~21 items por página mezclando tipos.
+    Paginamos hasta 4 páginas para acumular suficientes del tipo correcto.
     """
-    resultados = []
+    import unicodedata
+
+    def to_slug(s):
+        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+        return s.lower().strip().replace(" ", "-")
+
+    def _norm(s):
+        return unicodedata.normalize("NFKD", str(s)).encode("ascii","ignore").decode().lower()
+
     ciudad_map = {
         "bogota": "bogota-dc", "medellin": "antioquia/medellin",
         "cali": "valle-del-cauca/cali", "barranquilla": "atlantico/barranquilla",
@@ -699,99 +718,102 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
         "pasto": "narino/pasto", "monteria": "cordoba/monteria",
         "armenia": "quindio/armenia", "neiva": "huila/neiva",
     }
-    # Para ciudades no mapeadas: convertir a slug (minúsculas, espacios -> guiones, sin tildes)
-    import unicodedata
-    def to_slug(s):
-        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
-        return s.lower().strip().replace(" ", "-")
     ciudad_url = ciudad_map.get(criterios.ciudad.lower(), to_slug(criterios.ciudad))
-    url = f"https://www.fincaraiz.com.co/{criterios.tipo}/{criterios.operacion}/{ciudad_url}/"
-    params = {}
-    if criterios.precio_min:       params["precio-desde"] = criterios.precio_min
-    if criterios.precio_max:       params["precio-hasta"] = criterios.precio_max
-    if criterios.area_min:         params["area-desde"]   = criterios.area_min
-    if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
-    try:
-        resp = scraper_get(url, params, premium=True)
-        print(f"[FincaRaiz] status={resp.status_code} size={len(resp.text)}")
-        soup = BeautifulSoup(resp.text, "html.parser")
-        script = soup.find("script", id="__NEXT_DATA__")
-        if not script or not script.string:
-            print("[FincaRaiz] Sin __NEXT_DATA__")
-            return resultados
+    base_url   = f"https://www.fincaraiz.com.co/{criterios.tipo}/{criterios.operacion}/{ciudad_url}/"
 
-        data  = json.loads(script.string)
-        pp    = data.get("props", {}).get("pageProps", {})
-        fetch = pp.get("fetchResult", {})
+    tipo_fr_map = {
+        "apartamento": ["apartamento", "apartment"],
+        "casa":        ["casa", "house", "casas"],
+        "oficina":     ["oficina", "office"],
+        "lote":        ["lote", "terreno", "land"],
+    }
+    tipos_validos   = tipo_fr_map.get(criterios.tipo.lower(), [criterios.tipo.lower()])
+    ciudad_norm     = _norm(criterios.ciudad)
+    es_principal    = criterios.ciudad.lower() in ("bogota","medellin","cali","barranquilla","cartagena","bucaramanga")
 
-        # Fuente principal: fetchResult.searchFast.data
-        search_fast = fetch.get("searchFast", {})
-        items = search_fast.get("data") or []
-        if isinstance(items, dict):
-            # a veces data es {listings: [...]}
-            items = items.get("listings") or items.get("results") or list(items.values())
-            if items and isinstance(items[0], dict) and "data" in items[0]:
-                items = items[0]["data"]
-        print(f"[FincaRaiz searchFast.data] {len(items)} items")
-        tipo_fr_map = {
-            "apartamento": ["apartamento", "apartment"],
-            "casa":        ["casa", "house", "casas"],
-            "oficina":     ["oficina", "office"],
-            "lote":        ["lote", "terreno", "land"],
-        }
-        tipos_validos = tipo_fr_map.get(criterios.tipo.lower(), [criterios.tipo.lower()])
-        ciudad_lower  = criterios.ciudad.lower()
+    resultados  = []
+    pagina      = 1
+    max_paginas = 4  # máximo 4 páginas = ~84 items revisados
 
-        for item in items:
-            try:
-                # Filtrar por tipo de inmueble
-                tipo_item = str(item.get("property_type", {}).get("name") or
-                                item.get("propertyType") or "").lower()
-                if tipos_validos and not any(t in tipo_item for t in tipos_validos):
-                    print(f"[FR filtro tipo] descartado: {tipo_item}")
+    while len(resultados) < max_items and pagina <= max_paginas:
+        params = {"pagina": pagina}
+        if criterios.precio_min:       params["precio-desde"] = criterios.precio_min
+        if criterios.precio_max:       params["precio-hasta"] = criterios.precio_max
+        if criterios.area_min:         params["area-desde"]   = criterios.area_min
+        if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
+
+        try:
+            resp = scraper_get(base_url, params, premium=True)
+            print(f"[FincaRaiz p{pagina}] status={resp.status_code} size={len(resp.text)}")
+            if resp.status_code != 200:
+                break
+
+            soup   = BeautifulSoup(resp.text, "html.parser")
+            script = soup.find("script", id="__NEXT_DATA__")
+            if not script or not script.string:
+                print(f"[FincaRaiz p{pagina}] Sin __NEXT_DATA__")
+                break
+
+            data        = json.loads(script.string)
+            pp          = data.get("props", {}).get("pageProps", {})
+            search_fast = pp.get("fetchResult", {}).get("searchFast", {})
+            items       = search_fast.get("data") or []
+            if isinstance(items, dict):
+                items = items.get("listings") or items.get("results") or list(items.values())
+            if not items:
+                print(f"[FincaRaiz p{pagina}] Sin items, fin de paginación")
+                break
+
+            # Verificar si hay más páginas
+            paginator    = search_fast.get("paginatorInfo") or {}
+            total_paginas = paginator.get("lastPage") or paginator.get("totalPages") or pagina
+            print(f"[FincaRaiz p{pagina}/{total_paginas}] {len(items)} items en página")
+
+            aceptados_pagina = 0
+            for item in items:
+                try:
+                    # ── Filtro tipo ────────────────────────────────────────────
+                    tipo_item = _norm(item.get("property_type", {}).get("name") or
+                                     item.get("propertyType") or "")
+                    if tipos_validos and not any(t in tipo_item for t in tipos_validos):
+                        continue
+
+                    # ── Filtro ciudad ──────────────────────────────────────────
+                    if not es_principal:
+                        locs = item.get("locations") or {}
+                        def _loc_names(key):
+                            lst = locs.get(key) or []
+                            return [_norm(x.get("name","")) for x in lst if isinstance(x, dict)]
+                        todas = (
+                            _loc_names("city") + _loc_names("state") +
+                            _loc_names("locality") + _loc_names("neighbourhood") +
+                            [_norm(locs.get("location_main",{}).get("name",""))]
+                        )
+                        if not any(ciudad_norm in loc for loc in todas if loc):
+                            continue
+
+                    resultados.append(_fr_item(item, criterios.ciudad))
+                    aceptados_pagina += 1
+                    if len(resultados) >= max_items:
+                        break
+                except Exception as e:
+                    print(f"[FR item error] {e}")
                     continue
 
-                # Filtrar por ciudad: aceptar si coincide o si es municipio aledaño buscado
-                # Extraer todos los nombres de ubicación del item
-                locs       = item.get("locations") or {}
-                def _names(key):
-                    lst = locs.get(key) or []
-                    return [x.get("name","").lower() for x in lst if isinstance(x, dict)]
-                todas_locs = (
-                    _names("city") + _names("state") + _names("locality") +
-                    _names("neighbourhood") + _names("zone") + _names("region") +
-                    [locs.get("location_main", {}).get("name","").lower()]
-                )
-                # Normalizar ciudad buscada: quitar tildes para comparar
-                import unicodedata
-                def _norm(s):
-                    return unicodedata.normalize("NFKD", s).encode("ascii","ignore").decode().lower()
-                ciudad_norm = _norm(criterios.ciudad)
-                match_ciudad = any(ciudad_norm in _norm(loc) for loc in todas_locs if loc)
-                # Para ciudades principales aceptar resultados sin filtro estricto
-                es_ciudad_principal = ciudad_lower in ("bogota", "medellin", "cali", "barranquilla", "cartagena", "bucaramanga")
-                if not es_ciudad_principal and not match_ciudad:
-                    print(f"[FR filtro ciudad] descartado '{criterios.ciudad}' no en: {[l for l in todas_locs if l][:5]}")
-                    continue
+            print(f"[FincaRaiz p{pagina}] {aceptados_pagina} aceptados → total {len(resultados)}")
 
-                resultados.append(_fr_item(item, criterios.ciudad))
-                if len(resultados) >= max_items:
-                    break
-            except Exception as e:
-                print(f"[FR item error] {e}")
-                continue
+            if pagina >= total_paginas:
+                break
+            if len(items) < 5:  # página casi vacía, parar
+                break
+            pagina += 1
 
-        # Fuente secundaria: fetchResult.property (inmueble destacado)
-        if not resultados:
-            prop = fetch.get("property")
-            if isinstance(prop, dict) and prop.get("id"):
-                try: resultados.append(_fr_item(prop, criterios.ciudad))
-                except: pass
+        except Exception as e:
+            print(f"[FincaRaiz p{pagina}] Error: {e}")
+            import traceback; traceback.print_exc()
+            break
 
-    except Exception as e:
-        print(f"[FincaRaiz] Error: {e}")
-        import traceback; traceback.print_exc()
-    print(f"[FincaRaiz] Total: {len(resultados)}")
+    print(f"[FincaRaiz] Total final: {len(resultados)} en {pagina} página(s)")
     return resultados
 
 

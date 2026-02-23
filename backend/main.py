@@ -618,6 +618,348 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
     return resultados
 
 
+def _habi_item(item, ciudad):
+    precio = None
+    for k in ["price", "precio", "sale_price", "rent_price", "listing_price"]:
+        v = item.get(k)
+        if v:
+            precio = int(v) if isinstance(v, (int,float)) else limpiar_precio(str(v))
+            if precio: break
+
+    area = None
+    for k in ["area", "total_area", "built_area", "m2"]:
+        v = item.get(k)
+        if v:
+            try: area = float(v); break
+            except: area = limpiar_area(str(v))
+            if area: break
+
+    link = str(item.get("url") or item.get("link") or item.get("slug") or "")
+    if link and not link.startswith("http"):
+        link = "https://habi.co" + link
+
+    imgs = item.get("images") or item.get("photos") or []
+    img  = None
+    if imgs and isinstance(imgs, list):
+        first = imgs[0]
+        img = first.get("url") or first.get("src") or (first if isinstance(first, str) else None)
+
+    resultado = prop_base(
+        "Habi",
+        item.get("title") or item.get("name") or item.get("address") or "Propiedad Habi",
+        item.get("neighborhood") or item.get("barrio") or item.get("zone") or item.get("locality"),
+        item.get("city") or ciudad,
+        precio, area,
+        item.get("bedrooms") or item.get("habitaciones") or item.get("rooms"),
+        item.get("bathrooms") or item.get("banos"),
+        item.get("garages") or item.get("parking"),
+        item.get("stratum") or item.get("estrato"),
+        item.get("description") or item.get("descripcion") or "",
+        link,
+    )
+    resultado["imagen"] = img
+    return resultado
+
+
+def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
+    """
+    Finca Raiz: los datos estan en fetchResult.searchFast.data (lista de inmuebles).
+    fetchResult.property contiene el inmueble destacado individual.
+    """
+    resultados = []
+    ciudad_map = {
+        "bogota": "bogota-dc", "medellin": "antioquia/medellin",
+        "cali": "valle-del-cauca/cali", "barranquilla": "atlantico/barranquilla",
+        "cartagena": "bolivar/cartagena", "bucaramanga": "santander/bucaramanga",
+        "pereira": "risaralda/pereira", "manizales": "caldas/manizales",
+        "cucuta": "norte-de-santander/cucuta", "ibague": "tolima/ibague",
+        "santa marta": "magdalena/santa-marta", "villavicencio": "meta/villavicencio",
+        "pasto": "narino/pasto", "monteria": "cordoba/monteria",
+        "armenia": "quindio/armenia", "neiva": "huila/neiva",
+    }
+    # Para ciudades no mapeadas: convertir a slug (minúsculas, espacios -> guiones, sin tildes)
+    import unicodedata
+    def to_slug(s):
+        s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+        return s.lower().strip().replace(" ", "-")
+    ciudad_url = ciudad_map.get(criterios.ciudad.lower(), to_slug(criterios.ciudad))
+    url = f"https://www.fincaraiz.com.co/{criterios.tipo}/{criterios.operacion}/{ciudad_url}/"
+    params = {}
+    if criterios.precio_min:       params["precio-desde"] = criterios.precio_min
+    if criterios.precio_max:       params["precio-hasta"] = criterios.precio_max
+    if criterios.area_min:         params["area-desde"]   = criterios.area_min
+    if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
+    try:
+        resp = scraper_get(url, params, premium=True)
+        print(f"[FincaRaiz] status={resp.status_code} size={len(resp.text)}")
+        soup = BeautifulSoup(resp.text, "html.parser")
+        script = soup.find("script", id="__NEXT_DATA__")
+        if not script or not script.string:
+            print("[FincaRaiz] Sin __NEXT_DATA__")
+            return resultados
+
+        data  = json.loads(script.string)
+        pp    = data.get("props", {}).get("pageProps", {})
+        fetch = pp.get("fetchResult", {})
+
+        # Fuente principal: fetchResult.searchFast.data
+        search_fast = fetch.get("searchFast", {})
+        items = search_fast.get("data") or []
+        if isinstance(items, dict):
+            # a veces data es {listings: [...]}
+            items = items.get("listings") or items.get("results") or list(items.values())
+            if items and isinstance(items[0], dict) and "data" in items[0]:
+                items = items[0]["data"]
+        print(f"[FincaRaiz searchFast.data] {len(items)} items")
+        tipo_fr_map = {
+            "apartamento": ["apartamento", "apartment"],
+            "casa":        ["casa", "house", "casas"],
+            "oficina":     ["oficina", "office"],
+            "lote":        ["lote", "terreno", "land"],
+        }
+        tipos_validos = tipo_fr_map.get(criterios.tipo.lower(), [criterios.tipo.lower()])
+        ciudad_lower  = criterios.ciudad.lower()
+
+        for item in items:
+            try:
+                # Filtrar por tipo de inmueble
+                tipo_item = str(item.get("property_type", {}).get("name") or
+                                item.get("propertyType") or "").lower()
+                if tipos_validos and not any(t in tipo_item for t in tipos_validos):
+                    print(f"[FR filtro tipo] descartado: {tipo_item}")
+                    continue
+
+                # Filtrar por ciudad: aceptar si coincide o si es municipio aledaño buscado
+                locs      = item.get("locations") or {}
+                city_list = locs.get("city") or []
+                city_name = city_list[0].get("name","").lower() if city_list else ""
+                loc_main  = locs.get("location_main", {}).get("name","").lower()
+                if ciudad_lower not in ("bogota", "medellin", "cali", "barranquilla"):
+                    # Para municipios pequeños ser estrictos con la ciudad
+                    if ciudad_lower not in city_name and ciudad_lower not in loc_main:
+                        print(f"[FR filtro ciudad] descartado: city={city_name} main={loc_main}")
+                        continue
+
+                resultados.append(_fr_item(item, criterios.ciudad))
+                if len(resultados) >= max_items:
+                    break
+            except Exception as e:
+                print(f"[FR item error] {e}")
+                continue
+
+        # Fuente secundaria: fetchResult.property (inmueble destacado)
+        if not resultados:
+            prop = fetch.get("property")
+            if isinstance(prop, dict) and prop.get("id"):
+                try: resultados.append(_fr_item(prop, criterios.ciudad))
+                except: pass
+
+    except Exception as e:
+        print(f"[FincaRaiz] Error: {e}")
+        import traceback; traceback.print_exc()
+    print(f"[FincaRaiz] Total: {len(resultados)}")
+    return resultados
+
+
+def _fr_item(item, ciudad):
+    """
+    Normaliza un item de Finca Raiz.
+    Estructura real: price.amount, m2Built, bedrooms, bathrooms,
+    stratum, locations.locality[0].name, link, images[0].image
+    """
+    # Precio: price es un dict con amount
+    precio = None
+    price_obj = item.get("price")
+    if isinstance(price_obj, dict):
+        precio = limpiar_precio(str(price_obj.get("amount") or price_obj.get("admin_included") or ""))
+    if not precio:
+        for k in ["price_amount_usd", "canonicalPrice", "salePrice", "rentPrice"]:
+            v = item.get(k)
+            if v:
+                precio = limpiar_precio(str(v))
+                if precio: break
+
+    # Area: m2Built es el campo principal
+    area = None
+    for k in ["m2Built", "m2", "m2apto", "m2Terrain"]:
+        v = item.get(k)
+        if v:
+            try:
+                area = float(str(v).replace(",", "."))
+                if area: break
+            except: continue
+    if not area:
+        # Buscar en technicalSheet
+        for ts in item.get("technicalSheet", []):
+            if ts.get("field") in ("m2Built", "area") and ts.get("value"):
+                area = limpiar_area(ts["value"])
+                if area: break
+
+    # Barrio: locations.locality[0].name
+    barrio = None
+    locs = item.get("locations") or {}
+    locality = locs.get("locality") or []
+    if locality and isinstance(locality, list):
+        barrio = locality[0].get("name")
+    if not barrio:
+        zone = locs.get("zone") or []
+        if zone and isinstance(zone, list):
+            barrio = zone[0].get("name")
+    if not barrio:
+        barrio = item.get("address") or "Ver enlace"
+
+    # Link: relativo, agregar dominio
+    link = str(item.get("link") or "")
+    if link and not link.startswith("http"):
+        link = "https://www.fincaraiz.com.co" + link
+
+    # Habitaciones y banos: buscar en technicalSheet si no en item
+    habitaciones = item.get("bedrooms")
+    banos        = item.get("bathrooms")
+    garajes      = item.get("garage") or item.get("garages")
+    for ts in item.get("technicalSheet", []):
+        field = ts.get("field", "")
+        val   = ts.get("value")
+        if field == "bedrooms"  and not habitaciones: habitaciones = val
+        if field == "bathrooms" and not banos:        banos = val
+        if field == "garage"    and not garajes:      garajes = val
+
+    # Imagen principal
+    imagenes = item.get("images") or []
+    img = imagenes[0].get("image") if imagenes else None
+
+    resultado = prop_base(
+        "Finca Raiz",
+        item.get("title") or item.get("name") or "Propiedad",
+        barrio, ciudad, precio, area,
+        habitaciones, banos, garajes,
+        item.get("stratum"),
+        item.get("description") or "",
+        link,
+    )
+    resultado["imagen"] = img
+    return resultado
+
+
+def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
+    """
+    Ciencuadras no usa __NEXT_DATA__ sino un JSON embebido en un <script>
+    con formato: {&q;results-/venta/...&q;: {data: {highlights: [...]}}}
+    Los &q; son comillas escapadas en HTML.
+    """
+    resultados = []
+    ciudad_slug_map = {
+        "bogota": "bogota", "medellin": "medellin",
+        "cali": "cali", "barranquilla": "barranquilla", "cartagena": "cartagena",
+    }
+    ciudad_slug = ciudad_slug_map.get(criterios.ciudad, criterios.ciudad)
+    url = f"https://www.ciencuadras.com/{criterios.operacion}/{criterios.tipo}/{ciudad_slug}"
+    params = {}
+    if criterios.precio_min:       params["precio_min"]   = criterios.precio_min
+    if criterios.precio_max:       params["precio_max"]   = criterios.precio_max
+    if criterios.area_min:         params["area_min"]     = criterios.area_min
+    if criterios.habitaciones_min: params["habitaciones"] = criterios.habitaciones_min
+    try:
+        resp = scraper_get(url, params)
+        print(f"[Ciencuadras] status={resp.status_code} size={len(resp.text)}")
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        html_dec = resp.text.replace("&q;", '"').replace("&amp;q;", '"')
+
+        # Metodo 1 (PRIORITARIO): JSON con &q; — tiene precio, area, imagen, bedrooms, link completo
+        m = re.search(r'"highlights"\s*:\s*(\[.+?\])\s*,\s*"[a-zA-Z]', html_dec, re.DOTALL)
+        if m:
+            try:
+                items = json.loads(m.group(1))
+                print(f"[Ciencuadras &q; highlights] {len(items)} items")
+                for item in items[:max_items]:
+                    try:
+                        link = item.get("url") or ""
+                        if link and not link.startswith("http"):
+                            link = "https://www.ciencuadras.com" + link
+                        # Ciencuadras usa salePrice / rentPrice según operación
+                        if criterios.operacion == "venta":
+                            precio_raw = item.get("salePrice") or item.get("price") or item.get("precio") or 0
+                        else:
+                            precio_raw = item.get("rentPrice") or item.get("price") or item.get("precio") or 0
+                        precio = int(precio_raw) if isinstance(precio_raw, (int, float)) and precio_raw > 0 else limpiar_precio(str(precio_raw))
+                        area_raw = item.get("area") or item.get("builtArea") or item.get("totalArea") or ""
+                        area = float(area_raw) if isinstance(area_raw, (int,float)) and area_raw else limpiar_area(str(area_raw))
+                        barrio = item.get("neighborhood") or item.get("sector") or item.get("locality") or item.get("location") or ""
+                        ciudad_item = item.get("city") or criterios.ciudad
+                        titulo = f"{item.get('realEstateType') or 'Propiedad'} en {barrio or ciudad_item}"
+
+                        resultado = prop_base(
+                            "Ciencuadras", titulo, barrio, ciudad_item,
+                            precio, area,
+                            item.get("rooms") or item.get("bedrooms"),
+                            item.get("baths") or item.get("bathrooms"),
+                            item.get("garages"),
+                            item.get("stratum"),
+                            item.get("address") or item.get("description") or "",
+                            link,
+                            item.get("antiquity"),
+                        )
+                        resultado["imagen"] = item.get("image")
+                        resultados.append(resultado)
+                    except Exception as e2:
+                        print(f"[Ciencuadras item error] {e2}")
+                        continue
+            except Exception as e:
+                print(f"[Ciencuadras &q;] Error: {e}")
+
+        # Metodo 2 (FALLBACK): ld+json — solo tiene nombre, url y precio
+        if not resultados:
+            for script in soup.find_all("script", {"type": "application/ld+json"}):
+                try:
+                    data  = json.loads(script.string or "")
+                    items = data.get("itemListElement", [])
+                    if not items: continue
+                    print(f"[Ciencuadras ld+json] {len(items)} items")
+                    for el in items[:max_items]:
+                        item   = el.get("item", el)
+                        offers = item.get("offers") or {}
+                        precio_raw = offers.get("price") or 0
+                        precio = int(precio_raw) if isinstance(precio_raw, (int,float)) else limpiar_precio(str(precio_raw))
+                        link   = item.get("url") or el.get("url") or ""
+                        resultado = prop_base(
+                            "Ciencuadras",
+                            item.get("name") or "Propiedad",
+                            None, criterios.ciudad, precio, None,
+                            None, None, None, None,
+                            item.get("description") or "", link,
+                        )
+                        resultados.append(resultado)
+                    break
+                except: continue
+
+        # Metodo 3: buscar URLs directas de inmuebles en el HTML
+        if not resultados:
+            links_inmueble = set()
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "/inmueble/" in href:
+                    full = href if href.startswith("http") else "https://www.ciencuadras.com" + href
+                    links_inmueble.add(full)
+            print(f"[Ciencuadras links] {len(links_inmueble)} URLs de inmuebles encontradas")
+            for link in list(links_inmueble)[:max_items]:
+                card = soup.find("a", href=lambda h: h and link.endswith(h))
+                parent = card.parent if card else None
+                precio_el = parent.select_one("[class*='price'],[class*='precio']") if parent else None
+                resultados.append(prop_base(
+                    "Ciencuadras", "Apartamento en Ciencuadras",
+                    None, criterios.ciudad,
+                    limpiar_precio(precio_el.text) if precio_el else None,
+                    None, None, None, None, None, "", link,
+                ))
+
+    except Exception as e:
+        print(f"[Ciencuadras] Error: {e}")
+        import traceback; traceback.print_exc()
+    print(f"[Ciencuadras] Total: {len(resultados)}")
+    return resultados
+
+
 def scrape_facebook(criterios: CriteriosBusqueda, max_items=10):
     """
     Facebook Marketplace: usa la API interna de GraphQL de FB.
@@ -1187,12 +1529,6 @@ def buscar(criterios: CriteriosBusqueda):
                 errores.append(f"Ciencuadras: {e}")
                 print(f"[buscar] Ciencuadras fallo: {e}")
 
-        if "facebook" in criterios.portales:
-            try:
-                todos.extend(scrape_facebook(criterios, por_portal))
-            except Exception as e:
-                errores.append(f"Facebook: {e}")
-                print(f"[buscar] Facebook fallo: {e}")
 
         print(f"[buscar] Total bruto: {len(todos)} | Errores: {errores}")
         filtrados = aplicar_filtros(todos, criterios)

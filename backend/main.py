@@ -412,8 +412,14 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
                         todas = (
                             _loc_names("city") + _loc_names("state") +
                             _loc_names("locality") + _loc_names("neighbourhood") +
-                            [_norm(locs.get("location_main",{}).get("name",""))]
+                            _loc_names("zone") + _loc_names("region") +
+                            [_norm(locs.get("location_main",{}).get("name",""))] +
+                            [_norm(item.get("address",""))]
                         )
+                        # Log del primer item rechazado para diagnóstico
+                        if pagina == 1 and aceptados_pagina == 0 and len(resultados) == 0:
+                            print(f"[FR debug ciudad] buscando='{ciudad_norm}' | todas_locs={todas[:8]}")
+                            print(f"[FR debug item] address={item.get('address')} | title={item.get('title','')[:50]}")
                         if not any(ciudad_norm in loc for loc in todas if loc):
                             continue
 
@@ -787,8 +793,14 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
                         todas = (
                             _loc_names("city") + _loc_names("state") +
                             _loc_names("locality") + _loc_names("neighbourhood") +
-                            [_norm(locs.get("location_main",{}).get("name",""))]
+                            _loc_names("zone") + _loc_names("region") +
+                            [_norm(locs.get("location_main",{}).get("name",""))] +
+                            [_norm(item.get("address",""))]
                         )
+                        # Log del primer item rechazado para diagnóstico
+                        if pagina == 1 and aceptados_pagina == 0 and len(resultados) == 0:
+                            print(f"[FR debug ciudad] buscando='{ciudad_norm}' | todas_locs={todas[:8]}")
+                            print(f"[FR debug item] address={item.get('address')} | title={item.get('title','')[:50]}")
                         if not any(ciudad_norm in loc for loc in todas if loc):
                             continue
 

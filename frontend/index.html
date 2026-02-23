@@ -462,11 +462,11 @@ body {
         <div class="field-row">
           <div class="field">
             <label>Mínimo</label>
-            <input class="input" id="precio_min" type="number" placeholder="0" step="10000000">
+            <input class="input" id="precio_min" type="text" placeholder="0" inputmode="numeric" autocomplete="off">
           </div>
           <div class="field">
             <label>Máximo</label>
-            <input class="input" id="precio_max" type="number" placeholder="800M" step="10000000">
+            <input class="input" id="precio_max" type="text" placeholder="800.000.000" inputmode="numeric" autocomplete="off">
           </div>
         </div>
       </div>
@@ -699,8 +699,8 @@ async function buscar() {
                         : document.getElementById('ciudad').value,
     tipo:             document.getElementById('tipo').value,
     operacion:        document.getElementById('operacion').value,
-    precio_min:       parseInt(document.getElementById('precio_min').value) || 0,
-    precio_max:       parseInt(document.getElementById('precio_max').value) || 0,
+    precio_min:       parsePrecio('precio_min'),
+    precio_max:       parsePrecio('precio_max'),
     area_min:         parseInt(document.getElementById('area_min').value)   || 0,
     area_max:         parseInt(document.getElementById('area_max').value)   || 0,
     habitaciones_min: parseInt(document.getElementById('habitaciones_min').value) || 0,
@@ -1077,8 +1077,8 @@ async function crearAlerta() {
                   : document.getElementById('ciudad').value,
     tipo: document.getElementById('tipo').value,
     operacion: document.getElementById('operacion').value,
-    precio_min: parseInt(document.getElementById('precio_min').value) || 0,
-    precio_max: parseInt(document.getElementById('precio_max').value) || 0,
+    precio_min: parsePrecio('precio_min'),
+    precio_max: parsePrecio('precio_max'),
     area_min: parseInt(document.getElementById('area_min').value) || 0,
     area_max: parseInt(document.getElementById('area_max').value) || 0,
     habitaciones_min: parseInt(document.getElementById('habitaciones_min').value) || 0,
@@ -1138,6 +1138,36 @@ document.getElementById('ciudad').addEventListener('change', function() {
   } else {
     custom.style.display = 'none';
   }
+});
+
+// ── Formato de precios con separadores de miles ────────────────────────────────
+function formatPrecio(val) {
+  // Quitar todo excepto dígitos
+  const nums = val.replace(/\D/g, '');
+  if (!nums) return '';
+  // Formatear con puntos de miles
+  return parseInt(nums).toLocaleString('es-CO');
+}
+
+function parsePrecio(id) {
+  const val = document.getElementById(id).value.replace(/\D/g, '');
+  return parseInt(val) || 0;
+}
+
+['precio_min', 'precio_max'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('input', function() {
+    const cursorPos = this.selectionStart;
+    const oldLen    = this.value.length;
+    const formatted = formatPrecio(this.value);
+    this.value      = formatted;
+    // Mantener cursor en posición correcta
+    const newLen    = this.value.length;
+    this.setSelectionRange(cursorPos + (newLen - oldLen), cursorPos + (newLen - oldLen));
+  });
+  el.addEventListener('blur', function() {
+    this.value = formatPrecio(this.value);
+  });
 });
 </script>
 </body>

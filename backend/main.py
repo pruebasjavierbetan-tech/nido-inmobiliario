@@ -369,9 +369,41 @@ def scrape_fincaraiz(criterios: CriteriosBusqueda, max_items=10):
             if items and isinstance(items[0], dict) and "data" in items[0]:
                 items = items[0]["data"]
         print(f"[FincaRaiz searchFast.data] {len(items)} items")
-        for item in items[:max_items]:
-            try: resultados.append(_fr_item(item, criterios.ciudad))
-            except: continue
+        tipo_fr_map = {
+            "apartamento": ["apartamento", "apartment"],
+            "casa":        ["casa", "house", "casas"],
+            "oficina":     ["oficina", "office"],
+            "lote":        ["lote", "terreno", "land"],
+        }
+        tipos_validos = tipo_fr_map.get(criterios.tipo.lower(), [criterios.tipo.lower()])
+        ciudad_lower  = criterios.ciudad.lower()
+
+        for item in items:
+            try:
+                # Filtrar por tipo de inmueble
+                tipo_item = str(item.get("property_type", {}).get("name") or
+                                item.get("propertyType") or "").lower()
+                if tipos_validos and not any(t in tipo_item for t in tipos_validos):
+                    print(f"[FR filtro tipo] descartado: {tipo_item}")
+                    continue
+
+                # Filtrar por ciudad: aceptar si coincide o si es municipio aledaño buscado
+                locs      = item.get("locations") or {}
+                city_list = locs.get("city") or []
+                city_name = city_list[0].get("name","").lower() if city_list else ""
+                loc_main  = locs.get("location_main", {}).get("name","").lower()
+                if ciudad_lower not in ("bogota", "medellin", "cali", "barranquilla"):
+                    # Para municipios pequeños ser estrictos con la ciudad
+                    if ciudad_lower not in city_name and ciudad_lower not in loc_main:
+                        print(f"[FR filtro ciudad] descartado: city={city_name} main={loc_main}")
+                        continue
+
+                resultados.append(_fr_item(item, criterios.ciudad))
+                if len(resultados) >= max_items:
+                    break
+            except Exception as e:
+                print(f"[FR item error] {e}")
+                continue
 
         # Fuente secundaria: fetchResult.property (inmueble destacado)
         if not resultados:
@@ -498,37 +530,33 @@ def scrape_ciencuadras(criterios: CriteriosBusqueda, max_items=10):
             try:
                 items = json.loads(m.group(1))
                 print(f"[Ciencuadras &q; highlights] {len(items)} items")
-                if items:
-                    # Mostrar claves y valores del primer item para diagnóstico
-                    first = items[0]
-                    precio_keys = {k:v for k,v in first.items() if any(x in k.lower() for x in ["price","precio","valor","cost","canon"])}
-                    print(f"[CC diagnóstico] claves precio: {precio_keys}")
-                    print(f"[CC diagnóstico] todas las claves: {list(first.keys())}")
                 for item in items[:max_items]:
                     try:
                         link = item.get("url") or ""
                         if link and not link.startswith("http"):
                             link = "https://www.ciencuadras.com" + link
-                        # precio: int, float, o string con puntos/comas
-                        precio_raw = item.get("price") or item.get("precio") or item.get("valor") or 0
-                        if isinstance(precio_raw, (int, float)) and precio_raw > 0:
-                            precio = int(precio_raw)
+                        # Ciencuadras usa salePrice / rentPrice según operación
+                        if criterios.operacion == "venta":
+                            precio_raw = item.get("salePrice") or item.get("price") or item.get("precio") or 0
                         else:
-                            precio = limpiar_precio(str(precio_raw))
+                            precio_raw = item.get("rentPrice") or item.get("price") or item.get("precio") or 0
+                        precio = int(precio_raw) if isinstance(precio_raw, (int, float)) and precio_raw > 0 else limpiar_precio(str(precio_raw))
                         area_raw = item.get("area") or item.get("builtArea") or item.get("totalArea") or ""
                         area = float(area_raw) if isinstance(area_raw, (int,float)) and area_raw else limpiar_area(str(area_raw))
                         barrio = item.get("neighborhood") or item.get("sector") or item.get("locality") or item.get("location") or ""
                         ciudad_item = item.get("city") or criterios.ciudad
                         titulo = f"{item.get('realEstateType') or 'Propiedad'} en {barrio or ciudad_item}"
-                        print(f"[CC item] precio_raw={precio_raw!r} → precio={precio} | area={area} | link={item.get('url','')[:50]}")
+
                         resultado = prop_base(
                             "Ciencuadras", titulo, barrio, ciudad_item,
                             precio, area,
-                            item.get("bedrooms"), item.get("bathrooms"),
-                            item.get("garages") or item.get("parkingLots"),
+                            item.get("rooms") or item.get("bedrooms"),
+                            item.get("baths") or item.get("bathrooms"),
+                            item.get("garages"),
                             item.get("stratum"),
-                            item.get("description") or "",
+                            item.get("address") or item.get("description") or "",
                             link,
+                            item.get("antiquity"),
                         )
                         resultado["imagen"] = item.get("image")
                         resultados.append(resultado)
